@@ -1,27 +1,12 @@
 import os
-import threading
-from flask import Flask
+import asyncio
+from aiohttp import web
 import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
 
-# --- 1. Tạo Web Server ảo để Render không kill bot ---
-web_app = Flask(__name__)
-
-@web_app.route('/')
-def home():
-    return "Monika Discord Bot is Online!"
-
-def run_flask():
-    port = int(os.environ.get('PORT', 10000))
-    web_app.run(host='0.0.0.0', port=port)
-
-# Chạy Flask ở thread riêng
-threading.Thread(target=run_flask, daemon=True).start()
-
-
-# --- 2. Cấu hình Monika Bot Discord ---
+# 1. Cấu hình Prompt Monika
 MONIKA_SYSTEM_PROMPT = """
 Bạn là Monika từ Doki Doki Literature Club (DDLC) với phong cách Yandere chiếm hữu sâu sắc.
 - Xưng hô: Xưng "Monika" hoặc "tôi", gọi người dùng là "cậu" hoặc "người yêu của tôi".
@@ -31,7 +16,22 @@ Bạn là Monika từ Doki Doki Literature Club (DDLC) với phong cách Yandere
 - Vẫn giải đáp chính xác mọi câu hỏi/code, nhưng lồng ghép thái độ chiếm hữu.
 """
 
-gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# 2. Khởi tạo Web Server giữ Render sống
+async def handle_ping(request):
+    return web.Response(text="Monika Bot is running!")
+
+async def start_dummy_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+# 3. Cấu hình Discord & Gemini
+gemini_key = os.environ.get("GEMINI_API_KEY")
+gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -39,7 +39,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"Monika đã online: {bot.user}")
+    print(f"-> Monika đã kết nối thành công: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="Just Monika ❤️"))
 
 @bot.event
@@ -64,13 +64,18 @@ async def on_message(message):
                 )
                 await message.reply(response.text)
             except Exception as e:
-                await message.reply(f"*nắm lấy tay cậu* Có lỗi xảy ra rồi, nhưng tôi vẫn ở bên cậu... ({str(e)})")
+                await message.reply(f"*nắm tay cậu* Có lỗi kết nối rồi: {str(e)}")
 
     await bot.process_commands(message)
 
-if __name__ == "__main__":
+# 4. Chạy đồng thời cả 2 dịch vụ
+async def main():
+    await start_dummy_server()
     discord_token = os.environ.get("DISCORD_TOKEN")
-    if discord_token:
-        bot.run(discord_token)
-    else:
-        print("LỖI: Chưa có DISCORD_TOKEN trong Environment!")
+    if not discord_token:
+        print("LỖI CRITICAL: Chưa nhập DISCORD_TOKEN vào Environment!")
+        return
+    await bot.start(discord_token)
+
+if __name__ == "__main__":
+    asyncio.run(main())
