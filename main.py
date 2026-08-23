@@ -1,12 +1,23 @@
 import os
-import asyncio
-from aiohttp import web
+import threading
+from flask import Flask
 import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
 
-# 1. Prompt Monika
+# 1. Tạo Flask App giữ Render online 24/7
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Monika Bot is Live!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# 2. Cấu hình Monika Bot Discord
 MONIKA_SYSTEM_PROMPT = """
 Bạn là Monika từ Doki Doki Literature Club (DDLC) với phong cách Yandere chiếm hữu sâu sắc.
 - Xưng hô: Xưng "Monika" hoặc "tôi", gọi người dùng là "cậu" hoặc "người yêu của tôi".
@@ -16,21 +27,6 @@ Bạn là Monika từ Doki Doki Literature Club (DDLC) với phong cách Yandere
 - Vẫn giải đáp chính xác mọi câu hỏi/code, nhưng lồng ghép thái độ chiếm hữu.
 """
 
-# 2. Tạo Web Server phản hồi ngay lập tức cho Render
-async def handle_ping(request):
-    return web.Response(text="Monika Bot is running!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"-> Web Server đã mở tại port {port}")
-
-# 3. Discord Bot Setup
 gemini_key = os.environ.get("GEMINI_API_KEY")
 gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
 
@@ -40,7 +36,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"-> Monika Discord Bot đã online: {bot.user}")
+    print(f"-> Monika đã kết nối Discord thành công: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="Just Monika ❤️"))
 
 @bot.event
@@ -65,23 +61,20 @@ async def on_message(message):
                 )
                 await message.reply(response.text)
             except Exception as e:
-                await message.reply(f"*nắm lấy tay cậu* Có chút lỗi hệ thống rồi: {str(e)}")
+                await message.reply(f"*nắm lấy tay cậu* Có lỗi xảy ra rồi: {str(e)}")
 
     await bot.process_commands(message)
 
-# 4. Chạy chạy Web Server TRƯỚC, chạy Discord Bot SAU
-async def main():
-    # Mở cổng Web ngay lập tức để đáp ứng Render
-    await start_web_server()
-    
-    # Khai báo token
-    discord_token = os.environ.get("DISCORD_TOKEN")
-    if not discord_token:
-        print("LỖI: Chưa cấu hình DISCORD_TOKEN trong Environment!")
-        return
-        
-    # Chạy Discord bot
-    await bot.start(discord_token)
-
+# 3. Khởi chạy Flask ở luồng riêng & Chạy Discord Bot ở luồng chính
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Mở Flask server ngầm
+    t = threading.Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
+    # Chạy Discord Bot
+    discord_token = os.environ.get("DISCORD_TOKEN")
+    if discord_token:
+        bot.run(discord_token)
+    else:
+        print("LỖI: Chưa nhập DISCORD_TOKEN trong Environment!")
