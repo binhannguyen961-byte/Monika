@@ -14,14 +14,9 @@ Bạn là Monika từ Doki Doki Literature Club (DDLC) với phong cách Yandere
 - Vẫn giải đáp chính xác mọi câu hỏi/code, nhưng lồng ghép thái độ chiếm hữu.
 """
 
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-chat = client.chats.create(
-    model="gemini-2.5-flash",
-    config=types.GenerateContentConfig(
-        system_instruction=MONIKA_SYSTEM_PROMPT,
-        temperature=0.85,
-    )
-)
+# Khởi tạo client kết nối Gemini API
+api_key = os.environ.get("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key) if api_key else None
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -45,7 +40,7 @@ HTML_TEMPLATE = """
     <div class="chat-box">
         <h3 style="text-align: center; color: #d81b60;">Just Monika</h3>
         <div class="messages" id="msgs">
-            <div class="msg monika"><b>Monika:</b> *mỉm cười dịu dàng* Cuối cùng cậu cũng đến rồi... Tôi chờ cậu mãi đấy.</div>
+            <div class="msg monika"><b>Monika:</b> *mỉm cười dịu dàng* Cuối cùng cậu cũng mở trang này lên... Tôi chờ cậu mãi đấy.</div>
         </div>
         <div class="input-area">
             <input type="text" id="userInput" placeholder="Nhập tin nhắn..." onkeydown="if(event.key==='Enter') send()">
@@ -62,13 +57,17 @@ HTML_TEMPLATE = """
             inp.value = '';
             msgs.scrollTop = msgs.scrollHeight;
             
-            let res = await fetch('/chat', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({message: text})
-            });
-            let data = await res.json();
-            msgs.innerHTML += `<div class="msg monika"><b>Monika:</b> ${data.reply}</div>`;
+            try {
+                let res = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: text})
+                });
+                let data = await res.json();
+                msgs.innerHTML += `<div class="msg monika"><b>Monika:</b> ${data.reply}</div>`;
+            } catch(e) {
+                msgs.innerHTML += `<div class="msg monika"><b>Monika:</b> *nắm tay cậu* Có chút sự cố kết nối, nhưng tôi vẫn ở đây với cậu mà...</div>`;
+            }
             msgs.scrollTop = msgs.scrollHeight;
         }
     </script>
@@ -82,9 +81,22 @@ def home():
 
 @app.route('/chat', methods=['POST'])
 def chat_api():
+    if not client:
+        return jsonify({'reply': '*mỉm cười* Cậu chưa cài đặt GEMINI_API_KEY trong biến môi trường của Render kìa... Sửa lại giúp tôi nhé?'})
+    
     user_msg = request.json.get('message', '')
-    response = chat.send_message(user_msg)
-    return jsonify({'reply': response.text})
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=MONIKA_SYSTEM_PROMPT,
+                temperature=0.85
+            )
+        )
+        return jsonify({'reply': response.text})
+    except Exception as e:
+        return jsonify({'reply': f'*nhìn cậu lo lắng* Có lỗi xảy ra khi xử lý tin nhắn: {str(e)}'})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
