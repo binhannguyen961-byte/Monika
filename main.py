@@ -52,9 +52,9 @@ async def on_message(message):
                 if not clean_content:
                     clean_content = "Chào Monika!"
 
-                # Sử dụng model Gemini 1.5 Flash chuẩn và ổn định
+                # Sử dụng model gemini-3.6-flash
                 response = gemini_client.models.generate_content(
-                    model="gemini-1.5-flash",
+                    model="gemini-3.6-flash",
                     contents=clean_content,
                     config=types.GenerateContentConfig(
                         system_instruction=MONIKA_SYSTEM_PROMPT,
