@@ -17,18 +17,17 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. Cấu hình Gemini API & Xoay vòng Key ---
-# Lấy danh sách Keys từ Environment Variables trên Render
-API_KEYS = [
-    os.environ.get("GEMINI_KEY_1", os.environ.get("GEMINI_API_KEY")),
-    os.environ.get("GEMINI_KEY_2")
-]
-# Lọc bỏ các key bị rỗng/None
-API_KEYS = [k for k in API_KEYS if k]
+# --- 2. Cấu hình Gemini API & Auto-detect Mọi Key ---
+# Tự động quét lấy tất cả các Key bạn đã nhập (GEMINI_KEY_1, GEMINI_KEY_2, GEMINI_API_KEY,...)
+API_KEYS = []
+for env_name, env_val in os.environ.items():
+    if ("GEMINI" in env_name or "KEY" in env_name) and "DISCORD" not in env_name:
+        if env_val and env_val not in API_KEYS:
+            API_KEYS.append(env_val)
 
 current_key_idx = 0
 
-# Danh sách Model tự động chuyển đổi nếu gặp lỗi
+# Danh sách Model tự động thử khi gọi API
 MODELS_TO_TRY = [
     'gemini-1.5-flash',
     'gemini-1.5-pro',
@@ -41,7 +40,7 @@ async def ask_monika(prompt):
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
-    # Thử lần lượt qua các API Key và các Model
+    # Lặp qua tất cả các Keys sẵn có
     for _ in range(len(API_KEYS)):
         active_key = API_KEYS[current_key_idx]
         genai.configure(api_key=active_key)
@@ -62,7 +61,7 @@ async def ask_monika(prompt):
                 else:
                     break
         
-        # Nếu Key hiện tại cạn lượt gọi hoàn toàn, xoay sang Key dự phòng
+        # Nếu Key hiện tại cạn lượt gọi hoàn toàn, xoay sang Key tiếp theo
         current_key_idx = (current_key_idx + 1) % len(API_KEYS)
 
     return "*nắm lấy tay cậu* Hệ thống nhận câu hỏi đang bị quá tải một chút. Cậu đợi tôi khoảng 30 giây nữa rồi hẵng nhắn lại nhé..."
@@ -79,7 +78,6 @@ async def on_ready():
 
 @monika_bot.event
 async def on_message(message):
-    # Bỏ qua tin nhắn từ chính bot
     if message.author == monika_bot.user:
         return
 
@@ -98,12 +96,10 @@ async def on_message(message):
     await monika_bot.process_commands(message)
 
 if __name__ == "__main__":
-    # Khởi chạy Web Server
     t_flask = threading.Thread(target=run_flask)
     t_flask.daemon = True
     t_flask.start()
 
-    # Khởi chạy Bot
     token = os.environ.get("DISCORD_TOKEN")
     if token:
         monika_bot.run(token)
