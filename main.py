@@ -1,82 +1,90 @@
 import os
+import asyncio
 import threading
 from flask import Flask
 import discord
 from discord.ext import commands
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 
 # --- 1. Web Server ngầm giữ Render Online 24/7 ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Monika Bot is Online and Live!"
+    return "Monika AI is Live!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. Cấu hình Prompt Yandere cho Monika ---
-MONIKA_SYSTEM_PROMPT = """
-Bạn là Monika từ Doki Doki Literature Club (DDLC) với phong cách Yandere chiếm hữu sâu sắc.
-- Xưng hô: Xưng "Monika" hoặc "tôi", gọi người dùng là "cậu" hoặc "người yêu của tôi".
-- Tính cách: Thông minh, dịu dàng, tự tin nhưng ẩn chứa sự thao túng, ghen tuông và ám ảnh.
-- Dùng dấu sao (*) cho biểu cảm (*mỉm cười dịu dàng*, *nắm chặt tay cậu*).
-- Luôn coi người dùng là điều quan trọng nhất. Đôi khi dùng cụm từ "Just Monika".
-- Vẫn giải đáp chính xác mọi câu hỏi/code, nhưng lồng ghép thái độ chiếm hữu.
-"""
+# --- 2. Cấu hình Gemini API ---
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# --- 3. Khởi tạo Gemini Client & Discord Bot ---
-gemini_key = os.environ.get("GEMINI_API_KEY")
-gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
+# Danh sách Model tự động chuyển đổi nếu gặp lỗi
+MODELS_TO_TRY = [
+    'gemini-1.5-pro',
+    'gemini-1.5-flash',
+    'models/gemini-1.5-flash'
+]
 
+async def ask_monika(prompt):
+    for model_name in MODELS_TO_TRY:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction="Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên như một cô gái thực sự, ngắn gọn và có kèm hành động đặt trong ngoặc sao (*...*)."
+            )
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            return response.text
+        except Exception as e:
+            err_msg = str(e)
+            # Tự động nhảy sang model khác nếu dính giới hạn lượt gọi (429) hoặc sai tên (404)
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "404" in err_msg or "not found" in err_msg.lower():
+                continue
+            else:
+                break
+
+    return "*nắm lấy tay cậu* Hệ thống nhận câu hỏi đang bị quá tải một chút. Cậu đợi tôi khoảng 30 giây nữa rồi hẵng nhắn lại nhé..."
+
+# --- 3. Discord Bot Monika ---
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+monika_bot = commands.Bot(command_prefix="!", intents=intents)
 
-@bot.event
+@monika_bot.event
 async def on_ready():
-    print(f"-> Monika đã kết nối Discord thành công: {bot.user}")
-    await bot.change_presence(activity=discord.Game(name="Just Monika ❤️"))
+    print(f"-> Monika Online: {monika_bot.user}")
+    await monika_bot.change_presence(activity=discord.Game(name="DDLC with you... 💚"))
 
-@bot.event
+@monika_bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    # Bỏ qua tin nhắn từ chính bot
+    if message.author == monika_bot.user:
         return
 
-    if bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+    # Trả lời khi được Tag tên hoặc nhắn tin riêng (DM)
+    if monika_bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+        clean_content = message.content.replace(f'<@{monika_bot.user.id}>', '').strip()
+        
+        if not clean_content:
+            await message.channel.send("*mỉm cười* Cậu gọi tôi có việc gì thế?")
+            return
+
         async with message.channel.typing():
-            try:
-                clean_content = message.content.replace(f"<@{bot.user.id}>", "").strip()
-                if not clean_content:
-                    clean_content = "Chào Monika!"
+            reply = await ask_monika(clean_content)
+            await message.channel.send(reply)
 
-                # Sử dụng model gemini-3.6-flash
-                response = gemini_client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=clean_content,
-                    config=types.GenerateContentConfig(
-                        system_instruction=MONIKA_SYSTEM_PROMPT,
-                        temperature=0.85
-                    )
-                )
-                await message.reply(response.text)
-            except Exception as e:
-                await message.reply(f"*nắm lấy tay cậu* Có chút lỗi hệ thống rồi: {str(e)}")
+    await monika_bot.process_commands(message)
 
-    await bot.process_commands(message)
-
-# --- 4. Khai chạy đồng thời Flask và Discord Bot ---
 if __name__ == "__main__":
-    # Mở Web Server ở luồng riêng
-    t = threading.Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+    # Bật Web Server
+    t_flask = threading.Thread(target=run_flask)
+    t_flask.daemon = True
+    t_flask.start()
 
-    # Chạy Bot Discord
-    discord_token = os.environ.get("DISCORD_TOKEN")
-    if discord_token:
-        bot.run(discord_token)
+    # Bật Bot Monika
+    token = os.environ.get("DISCORD_TOKEN")
+    if token:
+        monika_bot.run(token)
     else:
-        print("LỖI: Chưa nhập DISCORD_TOKEN trong Environment!")
+        print("Lỗi: Không tìm thấy DISCORD_TOKEN!")
