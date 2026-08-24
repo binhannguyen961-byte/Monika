@@ -6,7 +6,6 @@ import discord
 from discord.ext import commands
 import google.generativeai as genai
 
-# --- 1. Web Server ngầm giữ Render Online 24/7 ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -17,7 +16,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. Cấu hình Gemini API ---
+# Lấy Key tự động
 API_KEYS = []
 for env_name, env_val in os.environ.items():
     if ("GEMINI" in env_name or "KEY" in env_name) and "DISCORD" not in env_name:
@@ -28,23 +27,26 @@ current_key_idx = 0
 
 async def ask_monika(prompt):
     global current_key_idx
-
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
-    # Xoay vòng lượt gọi qua từng API Key nếu có nhiều key
     for i in range(len(API_KEYS)):
         idx = (current_key_idx + i) % len(API_KEYS)
-        active_key = API_KEYS[idx]
-        genai.configure(api_key=active_key)
+        genai.configure(api_key=API_KEYS[idx])
 
         try:
-            # Sử dụng duy nhất 1 model gemini-1.5-flash (không fallback)
-            model = genai.GenerativeModel(
-                model_name='gemini-1.5-flash',
-                system_instruction="Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn và có kèm hành động đặt trong ngoặc (*...*)."
+            # Dùng đúng tên model chuẩn của Google AI Studio
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            chat = model.start_chat(history=[])
+            
+            # Đưa system instruction trực tiếp vào ngữ cảnh
+            full_prompt = (
+                "Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm "
+                "và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn, "
+                f"có kèm hành động đặt trong ngoặc (*...*).\n\nNgười dùng hỏi: {prompt}"
             )
-            response = await asyncio.to_thread(model.generate_content, prompt)
+            
+            response = await asyncio.to_thread(model.generate_content, full_prompt)
             current_key_idx = idx
             return response.text
         except Exception as e:
@@ -52,11 +54,8 @@ async def ask_monika(prompt):
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 continue
             else:
-                return f"*bối rối* Có vẻ hệ thống gặp lỗi rồi: {err_msg}"
+                return f"*bối rối* Có vẻ hệ thống gặp lỗi: {err_msg}"
 
-    return "*nắm lấy tay cậu* Hệ thống đang bị quá tải tần suất một chút. Cậu đợi tôi khoảng vài giây nữa rồi hẵng nhắn lại nhé..."
-
-# --- 3. Discord Bot Monika ---
 intents = discord.Intents.default()
 intents.message_content = True
 monika_bot = commands.Bot(command_prefix="!", intents=intents)
@@ -64,7 +63,6 @@ monika_bot = commands.Bot(command_prefix="!", intents=intents)
 @monika_bot.event
 async def on_ready():
     print(f"-> Monika Online: {monika_bot.user}")
-    await monika_bot.change_presence(activity=discord.Game(name="DDLC with you... 💚"))
 
 @monika_bot.event
 async def on_message(message):
@@ -73,7 +71,6 @@ async def on_message(message):
 
     if monika_bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         clean_content = message.content.replace(f'<@{monika_bot.user.id}>', '').strip()
-        
         if not clean_content:
             await message.channel.send("*mỉm cười* Cậu gọi tôi có việc gì thế?")
             return
@@ -92,5 +89,3 @@ if __name__ == "__main__":
     token = os.environ.get("DISCORD_TOKEN")
     if token:
         monika_bot.run(token)
-    else:
-        print("Lỗi: Không tìm thấy DISCORD_TOKEN!")
