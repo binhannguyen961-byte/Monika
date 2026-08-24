@@ -17,8 +17,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. Cấu hình Gemini API & Auto-detect Mọi Key ---
-# Tự động quét lấy tất cả các Key bạn đã nhập (GEMINI_KEY_1, GEMINI_KEY_2, GEMINI_API_KEY,...)
+# --- 2. Cấu hình Gemini API & Auto-detect Keys ---
 API_KEYS = []
 for env_name, env_val in os.environ.items():
     if ("GEMINI" in env_name or "KEY" in env_name) and "DISCORD" not in env_name:
@@ -27,11 +26,11 @@ for env_name, env_val in os.environ.items():
 
 current_key_idx = 0
 
-# Danh sách Model tự động thử khi gọi API
+# Danh sách các Model Gemini mới nhất
 MODELS_TO_TRY = [
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'models/gemini-1.5-flash'
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash'
 ]
 
 async def ask_monika(prompt):
@@ -40,9 +39,10 @@ async def ask_monika(prompt):
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
-    # Lặp qua tất cả các Keys sẵn có
-    for _ in range(len(API_KEYS)):
-        active_key = API_KEYS[current_key_idx]
+    # Lặp thử qua tất cả các Key sẵn có
+    for i in range(len(API_KEYS)):
+        idx = (current_key_idx + i) % len(API_KEYS)
+        active_key = API_KEYS[idx]
         genai.configure(api_key=active_key)
 
         for model_name in MODELS_TO_TRY:
@@ -52,19 +52,17 @@ async def ask_monika(prompt):
                     system_instruction="Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn và có kèm hành động đặt trong ngoặc (*...*)."
                 )
                 response = await asyncio.to_thread(model.generate_content, prompt)
+                current_key_idx = idx  # Lưu lại index của Key đang chạy thành công
                 return response.text
             except Exception as e:
                 err_msg = str(e)
-                # Nếu hết Quota hoặc sai tên model -> nhảy sang model tiếp theo
+                # Nếu dính lỗi hết hạn mức (429) hoặc không tìm thấy model (404) -> chuyển sang model/key tiếp theo
                 if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "404" in err_msg or "not found" in err_msg.lower():
                     continue
                 else:
                     break
-        
-        # Nếu Key hiện tại cạn lượt gọi hoàn toàn, xoay sang Key tiếp theo
-        current_key_idx = (current_key_idx + 1) % len(API_KEYS)
 
-    return "*nắm lấy tay cậu* Hệ thống nhận câu hỏi đang bị quá tải một chút. Cậu đợi tôi khoảng 30 giây nữa rồi hẵng nhắn lại nhé..."
+    return "*nắm lấy tay cậu* Hệ thống nhận câu hỏi đang bị quá tải tần suất một chút. Cậu đợi tôi khoảng 15-30 giây nữa rồi hẵng nhắn lại nhé..."
 
 # --- 3. Discord Bot Monika ---
 intents = discord.Intents.default()
