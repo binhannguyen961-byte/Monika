@@ -45,7 +45,7 @@ async def ask_monika(prompt, system_instruction=None):
             
             base_instruction = (
                 "Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm "
-                "và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn nhưng vẫn phải giữ được vai trò của bản thân, "
+                "và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn, "
                 "có kèm hành động đặt trong ngoặc (*...*)."
             )
             
@@ -64,7 +64,6 @@ async def ask_monika(prompt, system_instruction=None):
     return "*nắm lấy tay cậu* Hệ thống đang bị quá tải tần suất một chút. Cậu đợi tôi khoảng vài giây nữa rồi hẵng nhắn lại nhé..."
 
 # --- 3. Quản lý trạng thái Trò chơi Cờ X/O (Tic-Tac-Toe) ---
-# Lưu trữ bàn cờ theo channel_id
 active_games = {}
 
 def render_board(board):
@@ -90,7 +89,7 @@ def check_winner(board):
     for combo in win_combos:
         p1, p2, p3 = combo
         if board[p1] == board[p2] == board[p3] and board[p1] != ' ':
-            return board[p1] # Trả về 'X' hoặc 'O'
+            return board[p1]
     
     if all(val != ' ' for val in board.values()):
         return "DRAW"
@@ -134,21 +133,13 @@ async def monika_help(ctx):
         inline=False
     )
     
-    help_embed.add_field(
-        name="💡 Mẹo Nhỏ",
-        value="• Bạn có thể viết tọa độ in hoa hoặc in thường đều được (A1 = a1)\n• Nếu tôi không hiểu nước đi, tôi sẽ chọn ô ngẫu nhiên\n• Mỗi ván cờ riêng biệt tại mỗi kênh",
-        inline=False
-    )
-    
     help_embed.set_footer(text="*nắm lấy tay cậu* Cậu có gì thắc mắc không?")
-    
     await ctx.send(embed=help_embed)
 
 @monika_bot.command(name="Mxo")
 async def play_xo(ctx, *, move: str = ""):
     channel_id = ctx.channel.id
     
-    # Khởi tạo ván mới nếu chưa có hoặc lệnh reset/start
     if channel_id not in active_games or move.lower() in ["reset", "start", ""]:
         active_games[channel_id] = {
             '1A': ' ', '1B': ' ', '1C': ' ',
@@ -172,34 +163,31 @@ async def play_xo(ctx, *, move: str = ""):
             value=render_board(board),
             inline=False
         )
-        start_embed.add_field(
-            name="Cần Trợ Giúp?",
-            value="Gõ `!Mhelps` để xem hướng dẫn đầy đủ",
-            inline=False
-        )
-        
         await ctx.send(embed=start_embed)
         return
 
     board = active_games[channel_id]
-    move = move.strip().upper() # Chuẩn hóa thành A1, B2,...
+    raw_move = move.strip().upper()
 
-    # Kiểm tra tính hợp lệ của tọa độ người chơi nhập
+    # Xử lý chuẩn hóa tọa độ người dùng nhập (VD: B2 -> 2B)
+    if len(raw_move) == 2:
+        if raw_move[0] in ['A', 'B', 'C'] and raw_move[1] in ['1', '2', '3']:
+            move = raw_move[1] + raw_move[0]
+        else:
+            move = raw_move
+    else:
+        move = raw_move
+
     valid_positions = list(board.keys())
     if move not in valid_positions:
         error_embed = discord.Embed(
             title="❌ Tọa Độ Không Hợp Lệ",
-            description=f"*nghiêng đầu* `{move}` không đúng rồi cậu ơi!",
+            description=f"*nghiêng đầu* `{raw_move}` không đúng rồi cậu ơi!",
             color=discord.Color.red()
         )
         error_embed.add_field(
             name="Tọa Độ Hợp Lệ",
             value="A1, A2, A3, B1, B2, B3, C1, C2, C3",
-            inline=False
-        )
-        error_embed.add_field(
-            name="Ví Dụ Đúng",
-            value="`!Mxo A1` | `!Mxo B2` | `!Mxo C3`",
             inline=False
         )
         await ctx.send(embed=error_embed)
@@ -208,7 +196,7 @@ async def play_xo(ctx, *, move: str = ""):
     if board[move] != ' ':
         error_embed = discord.Embed(
             title="⚠️ Ô Đã Có Quân Cờ",
-            description=f"*chớp mắt* Ô `{move}` đã bị chiếm rồi!",
+            description=f"*chớp mắt* Ô `{raw_move}` đã bị chiếm rồi!",
             color=discord.Color.orange()
         )
         error_embed.add_field(
@@ -222,7 +210,6 @@ async def play_xo(ctx, *, move: str = ""):
     # 1. Người chơi (X) đánh nước đi
     board[move] = 'X'
 
-    # Kiểm tra xem người chơi đã thắng chưa
     winner = check_winner(board)
     if winner == 'X':
         win_embed = discord.Embed(
@@ -230,42 +217,23 @@ async def play_xo(ctx, *, move: str = ""):
             description="*vỗ tay với ngạc nhiên* Wow! Cậu giỏi quá, cậu đã đánh bại tôi!",
             color=discord.Color.gold()
         )
-        win_embed.add_field(
-            name="Bàn Cờ Cuối Cùng",
-            value=render_board(board),
-            inline=False
-        )
-        win_embed.add_field(
-            name="Chơi Lại?",
-            value="Gõ `!Mxo start` để bắt đầu ván mới",
-            inline=False
-        )
+        win_embed.add_field(name="Bàn Cờ Cuối Cùng", value=render_board(board), inline=False)
         await ctx.send(embed=win_embed)
         del active_games[channel_id]
         return
     elif winner == "DRAW":
         draw_embed = discord.Embed(
             title="🤝 Ván Cờ Hòa",
-            description="*mỉm cười dịu dàng* Ván đấu bất phân thắng bại rồi! Cậu cũng hay lắm!",
+            description="*mỉm cười dịu dàng* Ván đấu bất phân thắng bại rồi!",
             color=discord.Color.blue()
         )
-        draw_embed.add_field(
-            name="Bàn Cờ Cuối Cùng",
-            value=render_board(board),
-            inline=False
-        )
-        draw_embed.add_field(
-            name="Chơi Lại?",
-            value="Gõ `!Mxo start` để bắt đầu ván mới",
-            inline=False
-        )
+        draw_embed.add_field(name="Bàn Cờ Cuối Cùng", value=render_board(board), inline=False)
         await ctx.send(embed=draw_embed)
         del active_games[channel_id]
         return
 
     # 2. Lượt AI (O) suy luận nước đi tiếp theo
     async with ctx.channel.typing():
-        # Xây dựng trạng thái bàn cờ dạng text để AI phân tích
         board_status_text = (
             f"Trạng thái bàn cờ hiện tại:\n"
             f"Hàng 1: A1={board['1A']}, B1={board['1B']}, C1={board['1C']}\n"
@@ -278,74 +246,47 @@ async def play_xo(ctx, *, move: str = ""):
         ai_prompt = (
             f"{board_status_text}\n\n"
             "Hãy chọn MỘT ô trống duy nhất làm nước đi tiếp theo của cậu (quân O). "
-            "QUY TẮC BẮT BUỘC: Câu trả lời của cậu PHẢI chứa chính xác mã tọa độ ô cậu chọn ở dạng chữ cái viết hoa kèm số (ví dụ: A1, B2, C3) ở đầu hoặc giữa câu. "
-            "Hãy suy luận chiến lược: nếu có cơ hội thắng thì chọn ô thắng, nếu không thì chặn nước đi của đối thủ, còn không thì chọn ô trung tâm hoặc góc."
+            "QUY TẮC BẮT BUỘC: Trả về tọa độ theo định dạng chữ cái trước số sau (ví dụ: A1, B2, C3)."
         )
 
-        ai_reply = await ask_monika(ai_prompt, system_instruction="Bạn đang chơi cờ X/O với người dùng. Hãy phân tích bàn cờ, suy luận chiến lược, và đưa ra nước đi hợp lệ. Bắt đầu câu trả lời bằng tọa độ ô bạn chọn (ví dụ: 'A1, tôi chọn...' hoặc 'Tôi sẽ chọn B2 vì...').")
+        ai_reply = await ask_monika(ai_prompt, system_instruction="Bạn đang chơi cờ X/O với người dùng. Hãy đưa ra nước đi hợp lệ.")
         
-        # Trích xuất tọa độ thông minh từ câu trả lời của AI
         chosen_pos = None
+        ai_reply_upper = ai_reply.upper()
         for pos in valid_positions:
-            if pos in ai_reply.upper() and board[pos] == ' ':
+            reversed_pos = pos[1] + pos[0]
+            if (pos in ai_reply_upper or reversed_pos in ai_reply_upper) and board[pos] == ' ':
                 chosen_pos = pos
                 break
         
-        # Trường hợp dự phòng nếu AI lỡ quên không ghi tọa độ chuẩn
         if not chosen_pos:
             empty_spots = [p for p, v in board.items() if v == ' ']
             if empty_spots:
                 import random
                 chosen_pos = random.choice(empty_spots)
 
-        # AI đánh quân O vào bàn cờ
         board[chosen_pos] = 'O'
-
-        # Kiểm tra xem AI đã thắng chưa sau nước đi
         winner = check_winner(board)
+        display_pos = chosen_pos[1] + chosen_pos[0]
         
         game_embed = discord.Embed(
             title="🎮 Lượt Của Monika",
-            description=f"*suy tư* Tôi chọn ô **{chosen_pos}**",
+            description=f"*suy tư* Tôi chọn ô **{display_pos}**",
             color=discord.Color.purple()
         )
-        game_embed.add_field(
-            name="Suy Luận",
-            value=ai_reply,
-            inline=False
-        )
-        game_embed.add_field(
-            name="Bàn Cờ Hiện Tại",
-            value=render_board(board),
-            inline=False
-        )
+        game_embed.add_field(name="Suy Luận", value=ai_reply, inline=False)
+        game_embed.add_field(name="Bàn Cờ Hiện Tại", value=render_board(board), inline=False)
         
         if winner == 'O':
             game_embed.color = discord.Color.red()
             game_embed.title = "🎭 Monika Thắng!"
             game_embed.description = "*cười khúc khích* Tiếc quá, tôi đã chiến thắng ván này rồi!"
-            game_embed.add_field(
-                name="Chơi Lại?",
-                value="Gõ `!Mxo start` để bắt đầu ván mới",
-                inline=False
-            )
             del active_games[channel_id]
         elif winner == "DRAW":
             game_embed.color = discord.Color.blue()
             game_embed.title = "🤝 Ván Cờ Hòa"
             game_embed.description = "*mỉm cười* Ván cờ hòa rồi!"
-            game_embed.add_field(
-                name="Chơi Lại?",
-                value="Gõ `!Mxo start` để bắt đầu ván mới",
-                inline=False
-            )
             del active_games[channel_id]
-        else:
-            game_embed.add_field(
-                name="Lượt Của Cậu",
-                value="Gõ `!Mxo [tọa độ]` để đánh nước đi tiếp theo",
-                inline=False
-            )
 
         await ctx.send(embed=game_embed)
 
@@ -363,37 +304,23 @@ async def on_message(message):
                 description="*mỉm cười* Cậu gọi tôi có việc gì thế?",
                 color=discord.Color.pink()
             )
-            response_embed.add_field(
-                name="Cần Trợ Giúp?",
-                value="Gõ `!Mhelps` để xem danh sách lệnh",
-                inline=False
-            )
+            response_embed.add_field(name="Cần Trợ Giúp?", value="Gõ `!Mhelps` để xem danh sách lệnh", inline=False)
             await message.channel.send(embed=response_embed)
             return
 
         async with message.channel.typing():
             reply = await ask_monika(clean_content)
             
-            # Chia nhỏ tin nhắn dài thành các embed
             if len(reply) > 2048:
-                # Tách thành các phần 2048 ký tự
                 parts = [reply[i:i+2048] for i in range(0, len(reply), 2048)]
                 for i, part in enumerate(parts):
                     if i == 0:
-                        response_embed = discord.Embed(
-                            title="💚 Monika",
-                            description=part,
-                            color=discord.Color.pink()
-                        )
+                        response_embed = discord.Embed(title="💚 Monika", description=part, color=discord.Color.pink())
                         await message.channel.send(embed=response_embed)
                     else:
                         await message.channel.send(part)
             else:
-                response_embed = discord.Embed(
-                    title="💚 Monika",
-                    description=reply,
-                    color=discord.Color.pink()
-                )
+                response_embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.pink())
                 await message.channel.send(embed=response_embed)
 
     await monika_bot.process_commands(message)
