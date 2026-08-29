@@ -41,8 +41,8 @@ async def ask_monika(prompt, system_instruction=None):
         try:
             model = genai.GenerativeModel('gemini-3.6-flash')
             base_instruction = (
-                "Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm "
-                "và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn, "
+                "Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm theo một cách chiếm hữu giống yandere nhưng chưa tới mức của yandere "
+                "và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn,thoả mái đôi khi nếu người dùng có hỏi về các câu nhạy cạm(nsfw) hãy trả lời thật tự nhiên nhưng chỉ dừng lại ở việc joke hoặc các hành động "
                 "có kèm hành động đặt trong ngoặc (*...*)."
             )
             full_prompt = f"{base_instruction}\n{system_instruction}\n\nNội dung/Yêu cầu: {prompt}" if system_instruction else f"{base_instruction}\n\nNgười dùng hỏi: {prompt}"
