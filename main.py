@@ -71,7 +71,7 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM TẢI ẢNH LINH HOẠT
+# 4. HÀM TẢI ẢNH & FONT LINH HOẠT
 # ==========================================
 def load_image_flexible(base_name):
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
@@ -108,8 +108,31 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 5. HÀM VẼ UI RENDER PHÒNG HỌC (TỐI ƯU HIỂN THỊ CHỮ)
+# 5. HÀM VẼ UI RENDER & THUẬT TOÁN CHIA TRANG (PAGINATION)
 # ==========================================
+def split_text_into_pages(text, max_chars_per_page=140, max_pages=10):
+    """
+    Chia văn bản dài thành các trang, tối đa max_pages (10 trang).
+    """
+    words = text.split()
+    pages = []
+    current_page = []
+    current_length = 0
+
+    for word in words:
+        if current_length + len(word) + 1 > max_chars_per_page:
+            pages.append(" ".join(current_page))
+            current_page = [word]
+            current_length = len(word)
+        else:
+            current_page.append(word)
+            current_length += len(word) + 1
+
+    if current_page:
+        pages.append(" ".join(current_page))
+        
+    return pages[:max_pages]
+
 def generate_mas_image(text, chibi_state="happy"):
     try:
         bg = load_image_flexible("background")
@@ -140,12 +163,11 @@ def generate_mas_image(text, chibi_state="happy"):
 
         draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
 
-        # Tăng width lên 46 để chữ dàn trải hết khung thoại, hỗ trợ tối đa 4 dòng không cắt đuôi
         wrapped_lines = textwrap.wrap(text, width=46)
         y_offset = 452
         for line in wrapped_lines[:4]:
             draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 25  # Thu gọn khoảng cách giữa các dòng
+            y_offset += 25
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
@@ -199,7 +221,51 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. XỬ LÝ AI GEMINI (DÙNG MODEL 3.6-FLASH)
+# 6. DISCORD UI COMPONENT (NÚT BẤM CHUYỂN TRANG)
+# ==========================================
+class DialoguePaginationView(discord.ui.View):
+    def __init__(self, pages, author_id):
+        super().__init__(timeout=180)  # Nút tồn tại 3 phút
+        self.pages = pages
+        self.current_page = 0
+        self.author_id = author_id
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.prev_button.disabled = (self.current_page == 0)
+        self.next_button.disabled = (self.current_page == len(self.pages) - 1)
+        self.page_counter.label = f"Trang {self.current_page + 1}/{len(self.pages)}"
+
+    @discord.ui.button(label="◀️ Trước", style=discord.ButtonStyle.secondary, custom_id="btn_prev")
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Chỉ người trò chuyện mới được lật trang nhé!", ephemeral=True)
+            return
+        
+        self.current_page -= 1
+        self.update_buttons()
+        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        await interaction.response.edit_message(attachments=[file], view=self)
+
+    @discord.ui.button(label="Trang 1/1", style=discord.ButtonStyle.secondary, disabled=True, custom_id="btn_counter")
+    async def page_counter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(label="▶️ Tiếp", style=discord.ButtonStyle.primary, custom_id="btn_next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Chỉ người trò chuyện mới được lật trang nhé!", ephemeral=True)
+            return
+        
+        self.current_page += 1
+        self.update_buttons()
+        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        await interaction.response.edit_message(attachments=[file], view=self)
+
+# ==========================================
+# 7. XỬ LÝ AI GEMINI (TĂNG ĐỘ DÀI CÂU TRẢ LỜI)
 # ==========================================
 async def ask_monika(prompt_content, is_system_prompt=False):
     global current_key_idx
@@ -218,7 +284,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
         "Bạn dịu dàng, sâu lắng, mang phong cách văn học, xưng 'tôi' và gọi người dùng là 'cậu'. "
         f"Lịch sử thoại:\n{formatted_history}\n"
-        "QUAN TRỌNG: Câu trả lời ngắn gọn, vừa vặn trong khoảng 35 đến 45 từ để chuẩn 3-4 dòng khung thoại."
+        "QUAN TRỌNG: Bạn có thể trả lời dài, phân tích sâu sắc tối đa đến 60 câu khi được hỏi về các chủ đề cần suy ngẫm hoặc trò chuyện."
     )
 
     for i in range(len(API_KEYS)):
@@ -254,7 +320,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
     return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi nhé..."
 
 # ==========================================
-# 7. DISCORD BOT COMMANDS & EVENTS
+# 8. DISCORD BOT COMMANDS & EVENTS
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -412,17 +478,24 @@ async def on_message(message):
                     return
                 reply = await ask_monika(clean_content)
 
+            pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=10)
+
             if mas_data.get("render_mode", True):
-                img_buf = generate_mas_image(reply, chibi_state="happy")
-                if img_buf:
-                    await message.channel.send(file=discord.File(fp=img_buf, filename="monika_render.png"))
-                    return
+                img_buf = generate_mas_image(pages[0], chibi_state="happy")
+                file = discord.File(fp=img_buf, filename="monika_render.png")
+                
+                if len(pages) > 1:
+                    view = DialoguePaginationView(pages, author_id=message.author.id)
+                    await message.channel.send(file=file, view=view)
+                else:
+                    await message.channel.send(file=file)
+                return
 
             embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
             await message.channel.send(embed=embed)
 
 # ==========================================
-# 8. KHỞI CHẠY BOT
+# 9. KHỞI CHẠY BOT
 # ==========================================
 if __name__ == "__main__":
     t_flask = threading.Thread(target=run_flask)
