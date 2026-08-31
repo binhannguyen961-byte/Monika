@@ -71,11 +71,12 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM HỖ TRỢ TẢI ẢNH (LINH ĐỘNG .PNG, .JPG, .JPEG) & FONT
+# 4. HÀM HỖ TRỢ TẢI ẢNH (HỖ TRỢ CẢ ĐUÔI HOA NHƯ .PNG, .JPG)
 # ==========================================
 def load_image_flexible(base_name):
-    """Tự động tìm file ảnh với đuôi .png, .jpg hoặc .jpeg trong thư mục assets"""
-    for ext in [".png", ".jpg", ".jpeg"]:
+    """Tự động tìm file ảnh hỗ trợ cả đuôi viết thường và viết hoa (.png, .PNG, .jpg, .JPG, .jpeg, .JPEG)"""
+    extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
+    for ext in extensions:
         path = os.path.join("assets", base_name + ext)
         if os.path.exists(path):
             try:
@@ -93,25 +94,22 @@ def get_font(size):
                 return ImageFont.truetype(font_path, size)
             except Exception:
                 pass
-    # Fallback cuối cùng nếu không tìm thấy font nào trong assets
     try:
         return ImageFont.load_default()
     except Exception:
         return ImageFont.load_default()
 
 # ==========================================
-# 5. HÀM VẼ UI RENDER PHÒNG HỌC (SỬA LỖI FONT & ẢNH)
+# 5. HÀM VẼ UI RENDER PHÒNG HỌC
 # ==========================================
 def generate_mas_image(text, chibi_state="happy"):
     try:
-        # 1. Nạp Background linh động
         bg = load_image_flexible("background")
         if bg:
             bg = bg.resize((1000, 600))
         else:
             bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
 
-        # 2. Nạp Chibi Monika linh động (vd: monika_happy.png hoặc monika_happy.jpg)
         chibi = load_image_flexible(f"monika_{chibi_state}")
         if not chibi:
             chibi = load_image_flexible("monika_happy")
@@ -120,7 +118,6 @@ def generate_mas_image(text, chibi_state="happy"):
             chibi = chibi.resize((380, 480))
             bg.paste(chibi, (310, 120), chibi)
 
-        # 3. Vẽ Textbox & Text văn học
         draw = ImageDraw.Draw(bg)
         
         textbox = load_image_flexible("textbox")
@@ -131,7 +128,7 @@ def generate_mas_image(text, chibi_state="happy"):
             draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
         font_name = get_font(24)
-        font_text = get_font(21)  # Kích thước chữ to rõ, văn học
+        font_text = get_font(21)
 
         draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
 
