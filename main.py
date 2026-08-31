@@ -71,16 +71,21 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM VẼ UI RENDER PHÒNG HỌC & VIDEO FRAME (.JPG)
+# 4. HÀM VẼ UI RENDER PHÒNG HỌC (PHONG CÁCH VĂN HỌC)
 # ==========================================
-def get_font(font_path, size):
-    try:
-        return ImageFont.truetype(font_path, size)
-    except Exception:
-        return ImageFont.load_default()
+def get_font(size):
+    """Ưu tiên tìm font tiếng Việt trong thư mục assets để hiển thị sắc nét"""
+    for font_name in ["font_regular.ttf", "arial.ttf", "Roboto-Regular.ttf"]:
+        font_path = os.path.join("assets", font_name)
+        if os.path.exists(font_path):
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
 
 def generate_mas_image(text, chibi_state="happy"):
-    """Tạo ảnh ghép Phòng học + Chibi Monika + Khung thoại"""
+    """Tạo ảnh ghép Phòng học + Chibi Monika + Khung thoại chữ to, phong cách văn học"""
     try:
         # 1. Background phòng học (Hỗ trợ .jpg và .png)
         bg_path = "assets/background.jpg" if os.path.exists("assets/background.jpg") else "assets/background.png"
@@ -113,16 +118,17 @@ def generate_mas_image(text, chibi_state="happy"):
         else:
             draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
-        font_name = get_font("assets/font_bold.ttf", 24)
-        font_text = get_font("assets/font_regular.ttf", 20)
+        font_name = get_font(24)  # Tên nhân vật nổi bật hơn
+        font_text = get_font(21)  # Tăng kích thước chữ nội dung to rõ, dễ đọc
 
-        draw.text((60, 425), "Monika", fill=(255, 200, 220), font=font_name)
+        draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
 
-        wrapped_lines = textwrap.wrap(text, width=65)
-        y_offset = 460
+        # Văn bản chia dòng gọn gàng hơn (width=52) kết hợp khoảng cách dòng thoáng đãng mang chất thơ
+        wrapped_lines = textwrap.wrap(text, width=52)
+        y_offset = 456
         for line in wrapped_lines[:3]:
-            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 28
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text, spacing=8)
+            y_offset += 34
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
@@ -160,16 +166,16 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         else:
             draw.rectangle([(30, 430), (970, 570)], fill=(10, 10, 15, 230), outline=(120, 198, 122), width=2)
 
-        font_name = get_font("assets/font_bold.ttf", 22)
-        font_text = get_font("assets/font_regular.ttf", 18)
+        font_name = get_font(22)
+        font_text = get_font(19)
 
-        draw.text((60, 442), "Monika", fill=(160, 235, 160), font=font_name)
+        draw.text((60, 440), "Monika", fill=(160, 235, 160), font=font_name)
 
-        wrapped_lines = textwrap.wrap(subtitle_text, width=65)
-        y_offset = 475
+        wrapped_lines = textwrap.wrap(subtitle_text, width=52)
+        y_offset = 470
         for line in wrapped_lines[:3]:
-            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 25
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text, spacing=6)
+            y_offset += 30
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
@@ -197,9 +203,9 @@ async def ask_monika(prompt, is_system_prompt=False):
 
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
-        "Bạn dịu dàng, thông minh, mỉm cười xưng 'tôi' và gọi người dùng là 'cậu'. "
+        "Bạn dịu dàng, sâu lắng, mang phong cách văn học, mỉm cười xưng 'tôi' và gọi người dùng là 'cậu'. "
         f"Lịch sử thoại:\n{formatted_history}\n"
-        "Trả lời ngắn gọn dưới 70 từ để nằm gọn trong khung hình."
+        "Trả lời ngắn gọn dưới 60 từ, từ ngữ mượt mà, sâu sắc để nằm gọn trong khung hình."
     )
 
     for i in range(len(API_KEYS)):
@@ -340,12 +346,12 @@ async def play_bad_apple(ctx):
                 sub = f"*Đang xem video... [{int(frame_count/fps)}s/{int(duration)}s]*"
                 img_buf = render_frame_with_mas(pil_img, subtitle_text=sub)
 
-                if img_buf:
-                    file = discord.File(fp=img_buf, filename="render_frame.png")
-                    if rendered_message is None:
-                        rendered_message = await ctx.send(file=file)
-                    else:
-                        await rendered_message.edit(attachments=[file])
+                    if img_buf:
+                        file = discord.File(fp=img_buf, filename="render_frame.png")
+                        if rendered_message is None:
+                            rendered_message = await ctx.send(file=file)
+                        else:
+                            await rendered_message.edit(attachments=[file])
 
                 await asyncio.sleep(0.38)
 
