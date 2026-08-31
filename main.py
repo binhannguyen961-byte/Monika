@@ -71,11 +71,25 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM HỖ TRỢ TẢI ẢNH (HỖ TRỢ CẢ ĐUÔI HOA NHƯ .PNG, .JPG)
+# 4. HÀM TẢI ẢNH LINH HOẠT (HỖ TRỢ RANDOM NỀN & ĐUÔI HOA)
 # ==========================================
 def load_image_flexible(base_name):
-    """Tự động tìm file ảnh hỗ trợ cả đuôi viết thường và viết hoa (.png, .PNG, .jpg, .JPG, .jpeg, .JPEG)"""
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
+    
+    # Nếu là background, tự động bốc ngẫu nhiên giữa background_1 và background_2
+    if base_name == "background":
+        choices = ["background_1", "background_2", "background"]
+        random.shuffle(choices)
+        for choice in choices:
+            for ext in extensions:
+                path = os.path.join("assets", choice + ext)
+                if os.path.exists(path):
+                    try:
+                        return Image.open(path).convert("RGBA")
+                    except Exception:
+                        pass
+                        
+    # Các ảnh khác quét bình thường
     for ext in extensions:
         path = os.path.join("assets", base_name + ext)
         if os.path.exists(path):
@@ -86,7 +100,6 @@ def load_image_flexible(base_name):
     return None
 
 def get_font(size):
-    """Ưu tiên tìm font tiếng Việt tùy chỉnh (font_regular.ttf) để chống lỗi chữ ô vuông"""
     for font_name in ["font_regular.ttf", "arial.ttf", "DejaVuSans.ttf", "Roboto-Regular.ttf"]:
         font_path = os.path.join("assets", font_name)
         if os.path.exists(font_path):
