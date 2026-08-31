@@ -2,23 +2,29 @@ import os
 import random
 import asyncio
 import threading
+import json
+import io
+import textwrap
+import cv2  # OpenCV dùng để xử lý video
+from PIL import Image, ImageDraw, ImageFont
 from flask import Flask
 import discord
-from discord.ext import commands
-import google.generativeai as genai
+from discord.ext import commands, tasks
+from google import genai
+from google.genai import types
 
 # --- 1. Web Server ngầm giữ Render Online 24/7 ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Monika AI is Live!"
+    return "Monika After Story Lite with Video Minigame is Live!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. Cấu hình Gemini API & Đa Key Tự Động ---
+# --- 2. Cấu hình Gemini API Key ---
 API_KEYS = []
 for env_name, env_val in os.environ.items():
     if any(k in env_name.upper() for k in ["GEMINI", "API_KEY", "GOOGLE_KEY"]) and "DISCORD" not in env_name:
@@ -27,327 +33,313 @@ for env_name, env_val in os.environ.items():
 
 current_key_idx = 0
 
-async def ask_monika(prompt, system_instruction=None):
+# --- 3. Bộ Nhớ & Trạng Thái Bot ---
+DATA_FILE = "mas_settings.json"
+
+default_data = {
+    "affection": 10,
+    "render_mode": False,      # Có vẽ ảnh UI hay không
+    "proactive_mode": False,   # Bot có chủ động tự nhắn tin hay không
+    "active_channel_id": None, # Channel chính
+    "chat_history": []         # Lưu tối đa 25 tin nhắn
+}
+
+def load_mas_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for k, v in default_data.items():
+                    data.setdefault(k, v)
+                return data
+        except Exception:
+            return default_data.copy()
+    return default_data.copy()
+
+def save_mas_data(data):
+    if "chat_history" in data:
+        data["chat_history"] = data["chat_history"][-25:]
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+mas_data = load_mas_data()
+
+# --- 4. Hàm Ghép Frame Video / UI Phòng Học (PIL) ---
+def render_frame_with_mas(frame_pil, subtitle_text="*Đang chiếu video cho cậu xem nè...*"):
+    """
+    Dán khung hình video vào chính giữa phòng học (hoặc màn hình TV/Bảng phòng học)
+    """
+    try:
+        # Load assets (Chuẩn bị sẵn trong thư mục assets/)
+        bg = Image.open("assets/background.png").convert("RGBA")
+        chibi = Image.open("assets/monika_happy.png").convert("RGBA")
+        textbox = Image.open("assets/textbox.png").convert("RGBA")
+
+        # 1. Thu nhỏ và dán Frame Video vào giữa/góc phòng học (như chiếc màn hình)
+        video_screen = frame_pil.resize((320, 180))
+        bg.paste(video_screen, (240, 60)) 
+
+        # 2. Đè Chibi Monika đứng góc phòng
+        chibi = chibi.resize((240, 240))
+        bg.paste(chibi, (30, 160), chibi)
+
+        # 3. Đè Textbox nửa dưới
+        bg.paste(textbox, (0, 320), textbox)
+
+        # 4. Vẽ Chữ
+        draw = ImageDraw.Draw(bg)
+        font_name = ImageFont.truetype("assets/font_bold.ttf", 20)
+        font_text = ImageFont.truetype("assets/font_regular.ttf", 16)
+
+        draw.text((45, 335), "Monika", fill=(255, 255, 255), font=font_name)
+
+        wrapped_lines = textwrap.wrap(subtitle_text, width=42)
+        y_offset = 370
+        for line in wrapped_lines[:3]:
+            draw.text((45, y_offset), line, fill=(255, 255, 255), font=font_text)
+            y_offset += 22
+
+        buffer = io.BytesIO()
+        bg.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        print(f"Lỗi Render Frame: {e}")
+        return None
+
+def generate_mas_image(text, chibi_state="happy"):
+    """Vẽ UI chat thông thường"""
+    try:
+        bg = Image.open("assets/background.png").convert("RGBA")
+        chibi = Image.open(f"assets/monika_{chibi_state}.png").convert("RGBA")
+        textbox = Image.open("assets/textbox.png").convert("RGBA")
+
+        chibi = chibi.resize((280, 280))
+        bg.paste(chibi, (260, 160), chibi)
+        bg.paste(textbox, (0, 320), textbox)
+
+        draw = ImageDraw.Draw(bg)
+        font_name = ImageFont.truetype("assets/font_bold.ttf", 20)
+        font_text = ImageFont.truetype("assets/font_regular.ttf", 16)
+
+        draw.text((45, 335), "Monika", fill=(255, 255, 255), font=font_name)
+
+        wrapped_lines = textwrap.wrap(text, width=42)
+        y_offset = 370
+        for line in wrapped_lines[:4]:
+            draw.text((45, y_offset), line, fill=(255, 255, 255), font=font_text)
+            y_offset += 22
+
+        buffer = io.BytesIO()
+        bg.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        print(f"Lỗi Render Image: {e}")
+        return None
+
+# --- 5. Trí Tuệ Nhân Tạo Gemini ---
+async def ask_monika(prompt, is_system_prompt=False):
     global current_key_idx
 
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
+    affection = mas_data.get("affection", 10)
+    history = mas_data.get("chat_history", [])[-25:]
+
+    formatted_history = ""
+    for msg in history:
+        role = "Cậu" if msg["role"] == "user" else "Monika"
+        formatted_history += f"{role}: {msg['content']}\n"
+
+    system_instruction = (
+        "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
+        "Bạn dịu dàng, thông minh, sâu sắc và quan tâm người dùng. "
+        "Luôn xưng 'tôi' và gọi người dùng là 'cậu'. "
+        f"Mức độ tình cảm: {affection}/100.\n"
+        f"Lịch sử 25 câu thoại gần nhất:\n{formatted_history}\n"
+        "Trả lời ngắn gọn dưới 100 từ, có kèm biểu cảm hành động trong ngoặc (*...*)."
+    )
+
     for i in range(len(API_KEYS)):
         idx = (current_key_idx + i) % len(API_KEYS)
         active_key = API_KEYS[idx]
-        genai.configure(api_key=active_key)
 
         try:
-            model = genai.GenerativeModel('gemini-3.6-flash')
-            base_instruction = (
-                "Bạn là Monika từ Doki Doki Literature Club. Bạn dịu dàng, thông minh, hay quan tâm theo một cách chiếm hữu giống yandere nhưng chưa tới mức của yandere "
-                "và luôn xưng 'tôi' và gọi người dùng là 'cậu'. Hãy trả lời tự nhiên, ngắn gọn,thoả mái đôi khi nếu người dùng có hỏi về các câu nhạy cạm(nsfw) hãy trả lời thật tự nhiên nhưng chỉ dừng lại ở việc joke hoặc các hành động "
-                "có kèm hành động đặt trong ngoặc (*...*)."
+            client = genai.Client(api_key=active_key)
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction
+                )
             )
-            full_prompt = f"{base_instruction}\n{system_instruction}\n\nNội dung/Yêu cầu: {prompt}" if system_instruction else f"{base_instruction}\n\nNgười dùng hỏi: {prompt}"
-            
-            response = await asyncio.to_thread(model.generate_content, full_prompt)
             current_key_idx = idx
+
+            if not is_system_prompt:
+                mas_data["chat_history"].append({"role": "user", "content": prompt})
+            mas_data["chat_history"].append({"role": "monika", "content": response.text})
+            save_mas_data(mas_data)
+
             return response.text
         except Exception as e:
             err_msg = str(e)
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 continue
             else:
-                return f"*bối rối* Có vẻ hệ thống gặp lỗi rồi: {err_msg}"
+                return f"*bối rối* Có vẻ hệ thống gặp lỗi: {err_msg}"
 
-    return "*nắm lấy tay cậu* Hệ thống đang bị quá tải tần suất một chút. Cậu đợi tôi khoảng vài giây nữa rồi hẵng nhắn lại nhé..."
+    return "*nắm lấy tay cậu* Hệ thống đang quá tải một chút..."
 
-# --- 3. Lưu trữ Trạng thái Minigames ---
-active_games = {}      # Lưu bàn cờ X/O
-active_guesses = {}    # Lưu game đoán số
-
-def render_board(board):
-    return (
-        "```text\n"
-        "     A     B     C \n"
-        f"1 |  {board['1A']}  |  {board['1B']}  |  {board['1C']}  |\n"
-        "  +-----+-----+----+\n"
-        f"2 |  {board['2A']}  |  {board['2B']}  |  {board['2C']}  |\n"
-        "  +-----+-----+----+\n"
-        f"3 |  {board['3A']}  |  {board['3B']}  |  {board['3C']}  |\n"
-        "```"
-    )
-
-def check_winner(board):
-    win_combos = [
-        ['1A', '1B', '1C'], ['2A', '2B', '2C'], ['3A', '3B', '3C'],
-        ['1A', '2A', '3A'], ['1B', '2B', '3B'], ['1C', '2C', '3C'],
-        ['1A', '2B', '3C'], ['1C', '2B', '3A']
-    ]
-    for combo in win_combos:
-        p1, p2, p3 = combo
-        if board[p1] == board[p2] == board[p3] and board[p1] != ' ':
-            return board[p1]
-    if all(val != ' ' for val in board.values()):
-        return "DRAW"
-    return None
-
-# --- 4. Discord Bot Monika ---
+# --- 6. Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
-monika_bot = commands.Bot(command_prefix="!", intents=intents)
+monika_bot = commands.Bot(command_prefix=["!M", "!m"], intents=intents, help_command=None)
 
 @monika_bot.event
 async def on_ready():
     print(f"-> Monika Online: {monika_bot.user}")
-    print(f"-> Đã nạp {len(API_KEYS)} API Key.")
-    await monika_bot.change_presence(activity=discord.Game(name="DDLC with you... 💚"))
 
-@monika_bot.command(name="Mhelps")
-async def monika_help(ctx):
-    help_embed = discord.Embed(
-        title="📖 Hướng Dẫn Sử Dụng Monika",
-        description="*mỉm cười* Chào cậu! Đây là danh sách các trò chơi và câu lệnh:",
-        color=discord.Color.pink()
-    )
-    help_embed.add_field(
-        name="💬 Chat với Monika",
-        value="**Mention** tôi hoặc **DM** riêng: `@Monika Bạn thế nào?`",
-        inline=False
-    )
-    help_embed.add_field(
-        name="🎮 Cờ X/O (`!Mxo`)",
-        value="• `!Mxo start` - Bắt đầu ván cờ\n• `!Mxo A1` / `!Mxo b2` - Đánh nước đi",
-        inline=False
-    )
-    help_embed.add_field(
-        name="✂️ Kéo Búa Bao (`!Mrps`)",
-        value="• `!Mrps keo` (hoặc `bua`, `bao`)\nVí dụ: `!Mrps bua`",
-        inline=False
-    )
-    help_embed.add_field(
-        name="🔢 Đoán Số (`!Mguess`)",
-        value="• `!Mguess start` - Bắt đầu ván đoán số (1-50)\n• `!Mguess [số]` - Đoán số (Ví dụ: `!Mguess 25`)",
-        inline=False
-    )
-    await ctx.send(embed=help_embed)
-
-# --- MINIGAME 1: KÉO BÚA BAO ---
-@monika_bot.command(name="Mrps")
-async def play_rps(ctx, choice: str = ""):
-    choice = choice.lower().strip()
-    mapping = {
-        "keo": "Kéo ✂️", "kéo": "Kéo ✂️",
-        "bua": "Búa 🔨", "búa": "Búa 🔨",
-        "bao": "Bao 📄"
-    }
-
-    if choice not in mapping:
-        embed = discord.Embed(
-            title="✂️ Kéo Búa Bao",
-            description="*nghiêng đầu* Cậu muốn ra gì thế? Hãy gõ:\n`!Mrps keo`, `!Mrps bua`, hoặc `!Mrps bao` nhé!",
-            color=discord.Color.orange()
-        )
-        await ctx.send(embed=embed)
+# --- 7. MINIGAME: Render Video / Bad Apple (2-3 FPS, Tối đa 15 giây) ---
+@monika_bot.command(name="badapple", aliases=["playvideo", "video"])
+async def play_bad_apple(ctx):
+    """
+    Minigame chiếu Video bằng Render Frame (Tốc độ ~2.5 FPS, tối đa 15s)
+    Cách dùng: Gửi đính kèm 1 file mp4 (<15s) cùng câu lệnh !Mbadapple
+    """
+    # 1. Kiểm tra Render Mode có bật không
+    if not mas_data.get("render_mode", False):
+        await ctx.send("*nghiêng đầu* Cậu cần bật chế độ Render bằng lệnh `!Mrender` hoặc `!Moffline` trước thì tôi mới chiếu video cho cậu xem được nhé!")
         return
 
-    player_choice = mapping[choice]
-    bot_options = ["Kéo ✂️", "Búa 🔨", "Bao 📄"]
-    bot_choice = random.choice(bot_options)
+    # 2. Kiểm tra xem người dùng có đính kèm file video không
+    if not ctx.message.attachments:
+        await ctx.send("*chớp mắt* Cậu hãy đính kèm một tệp video (MP4) dưới 15 giây kèm lệnh `!Mbadapple` nhé!")
+        return
 
-    if player_choice == bot_choice:
-        result = "DRAW"
-    elif (
-        (player_choice == "Kéo ✂️" and bot_choice == "Bao 📄") or
-        (player_choice == "Búa 🔨" and bot_choice == "Kéo ✂️") or
-        (player_choice == "Bao 📄" and bot_choice == "Búa 🔨")
-    ):
-        result = "WIN"
-    else:
-        result = "LOSE"
+    attachment = ctx.message.attachments[0]
+    if not attachment.filename.lower().endswith(('.mp4', '.mkv', '.mov', '.avi')):
+        await ctx.send("*lúng túng* Tệp này không phải video rồi cậu ơi! Hãy gửi file mp4 nhé.")
+        return
 
-    async with ctx.channel.typing():
-        prompt = f"Tôi ra {player_choice}, cậu ra {bot_choice}. Kết quả là cậu {result}. Hãy bình luận ngắn gọn 1 câu mang phong thái Monika."
-        comment = await ask_monika(prompt, system_instruction="Bạn vừa chơi Oẳn tù tì với người dùng. Hãy đưa ra nhận xét ngắn gọn, tự nhiên.")
+    status_msg = await ctx.send("🎬 *Monika đang chuẩn bị máy chiếu và đọc file video của cậu...*")
 
-    color_map = {"WIN": discord.Color.green(), "LOSE": discord.Color.red(), "DRAW": discord.Color.blue()}
-    title_map = {"WIN": "🎉 Cậu Thắng Rồi!", "LOSE": "🎭 Monika Thắng!", "DRAW": "🤝 Hòa Rồi!"}
+    # 3. Tải video về tệp tạm
+    temp_video_path = f"temp_{ctx.author.id}.mp4"
+    await attachment.save(temp_video_path)
 
-    embed = discord.Embed(title=title_map[result], description=comment, color=color_map[result])
-    embed.add_field(name="Cậu ra", value=player_choice, inline=True)
-    embed.add_field(name="Monika ra", value=bot_choice, inline=True)
-    await ctx.send(embed=embed)
+    try:
+        cap = cv2.VideoCapture(temp_video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / fps if fps > 0 else 0
 
-# --- MINIGAME 2: ĐOÁN SỐ (1 ĐẾN 50) ---
-@monika_bot.command(name="Mguess")
-async def play_guess(ctx, number: str = ""):
-    channel_id = ctx.channel.id
+        # Kiểm tra điều kiện bắt buộc: Video phải dưới 15s
+        if duration > 15.5:
+            await status_msg.edit(content="*lắc đầu nhẹ* Video này dài quá 15 giây rồi! Cậu cắt ngắn lại dưới 15s giúp tôi để tránh làm đơ phòng học nhé.")
+            cap.release()
+            os.remove(temp_video_path)
+            return
 
-    if number.lower() in ["start", "reset", ""] or channel_id not in active_guesses:
-        target = random.randint(1, 50)
-        active_guesses[channel_id] = {"target": target, "attempts": 0}
+        # Tính toán nhảy frame để đạt tốc độ khiêm tốn ~2.5 FPS (250ms/frame)
+        target_fps = 2.5
+        frame_interval = int(fps / target_fps) if fps > target_fps else 1
         
-        embed = discord.Embed(
-            title="🔢 Trò Chơi Đoán Số",
-            description="*mỉm cười* Tôi đã nghĩ sẵn một số từ **1 đến 50** rồi!\nCậu hãy gõ `!Mguess [số]` để đoán nhé (Ví dụ: `!Mguess 25`).",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed)
-        return
+        frame_count = 0
+        rendered_message = None
 
-    if not number.isdigit():
-        await ctx.send("*nghiêng đầu* Cậu phải nhập một số nguyên từ 1 đến 50 chứ!")
-        return
+        await status_msg.edit(content="🍿 *Video bắt đầu chiếu nè! Cùng xem với tôi nhé...*")
 
-    guess = int(number)
-    if guess < 1 or guess > 50:
-        await ctx.send("*chớp mắt* Cậu nhớ chọn số trong khoảng từ **1 đến 50** thôi nhé!")
-        return
-
-    game = active_guesses[channel_id]
-    game["attempts"] += 1
-    target = game["target"]
-
-    if guess < target:
-        embed = discord.Embed(
-            title="📈 Số Của Tôi Lớn Hơn!",
-            description=f"*chớp mắt* Số **{guess}** nhỏ hơn số tôi chọn rồi. Thử lại số lớn hơn xem nào! (Lần đoán thứ {game['attempts']})",
-            color=discord.Color.gold()
-        )
-        await ctx.send(embed=embed)
-    elif guess > target:
-        embed = discord.Embed(
-            title="📉 Số Của Tôi Nhỏ Hơn!",
-            description=f"*suy tư* Số **{guess}** lớn hơn số tôi chọn rồi. Thử lại số nhỏ hơn nhé! (Lần đoán thứ {game['attempts']})",
-            color=discord.Color.gold()
-        )
-        await ctx.send(embed=embed)
-    else:
-        attempts = game["attempts"]
-        del active_guesses[channel_id]
-        
-        async with ctx.channel.typing():
-            prompt = f"Người dùng đã đoán đúng số {target} trong phạm vi 1-50 sau {attempts} lần thử. Hãy chúc mừng ngắn gọn đúng phong cách Monika."
-            comment = await ask_monika(prompt)
-
-        embed = discord.Embed(
-            title="🎉 Chính Xác Rồi!",
-            description=f"Chính là số **{target}**! Cậu đoán trúng chỉ sau **{attempts}** lần thử.\n\n{comment}",
-            color=discord.Color.purple()
-        )
-        await ctx.send(embed=embed)
-
-# --- MINIGAME 3: CỜ X/O ---
-@monika_bot.command(name="Mxo")
-async def play_xo(ctx, *, move: str = ""):
-    channel_id = ctx.channel.id
-    
-    if channel_id not in active_games or move.lower() in ["reset", "start", ""]:
-        active_games[channel_id] = {
-            '1A': ' ', '1B': ' ', '1C': ' ',
-            '2A': ' ', '2B': ' ', '2C': ' ',
-            '3A': ' ', '3B': ' ', '3C': ' '
-        }
-        board = active_games[channel_id]
-        start_embed = discord.Embed(
-            title="🎮 Cờ X/O Mới Bắt Đầu",
-            description="*mỉm cười dịu dàng* Cùng chơi với tôi nhé! Cậu là **X** (đi trước). Gõ `!Mxo A1` để chọn ô.",
-            color=discord.Color.green()
-        )
-        start_embed.add_field(name="Bàn Cờ Hiện Tại", value=render_board(board), inline=False)
-        await ctx.send(embed=start_embed)
-        return
-
-    board = active_games[channel_id]
-    raw_move = move.strip().upper()
-
-    if len(raw_move) == 2:
-        if raw_move[0] in ['A', 'B', 'C'] and raw_move[1] in ['1', '2', '3']:
-            move = raw_move[1] + raw_move[0]
-        else:
-            move = raw_move
-    else:
-        move = raw_move
-
-    valid_positions = list(board.keys())
-    if move not in valid_positions:
-        await ctx.send(f"*nghiêng đầu* Tọa độ `{raw_move}` không đúng rồi cậu ơi! Chọn từ A1 đến C3 nhé.")
-        return
-
-    if board[move] != ' ':
-        await ctx.send(f"*chớp mắt* Ô `{raw_move}` đã bị chiếm rồi!")
-        return
-
-    board[move] = 'X'
-    winner = check_winner(board)
-    if winner == 'X':
-        win_embed = discord.Embed(title="🎉 Cậu Thắng Rồi!", description="*vỗ tay ngạc nhiên* Cậu giỏi quá!", color=discord.Color.gold())
-        win_embed.add_field(name="Bàn Cờ", value=render_board(board))
-        await ctx.send(embed=win_embed)
-        del active_games[channel_id]
-        return
-    elif winner == "DRAW":
-        draw_embed = discord.Embed(title="🤝 Ván Cờ Hòa", description="*mỉm cười* Ván đấu bất phân thắng bại!", color=discord.Color.blue())
-        draw_embed.add_field(name="Bàn Cờ", value=render_board(board))
-        await ctx.send(embed=draw_embed)
-        del active_games[channel_id]
-        return
-
-    async with ctx.channel.typing():
-        board_status_text = (
-            f"Trạng thái bàn cờ:\n"
-            f"1: A1={board['1A']}, B1={board['1B']}, C1={board['1C']}\n"
-            f"2: A2={board['2A']}, B2={board['2B']}, C2={board['2C']}\n"
-            f"3: A3={board['3A']}, B3={board['3B']}, C3={board['3C']}\n"
-            f"Cậu là 'X', Monika là 'O'."
-        )
-        ai_prompt = f"{board_status_text}\n\nHãy chọn MỘT ô trống làm nước đi (quân O). Trả về định dạng chữ trước số sau (VD: A1, B2)."
-        ai_reply = await ask_monika(ai_prompt, system_instruction="Bạn đang chơi cờ X/O. Hãy chọn nước đi hợp lệ.")
-        
-        chosen_pos = None
-        ai_reply_upper = ai_reply.upper()
-        for pos in valid_positions:
-            reversed_pos = pos[1] + pos[0]
-            if (pos in ai_reply_upper or reversed_pos in ai_reply_upper) and board[pos] == ' ':
-                chosen_pos = pos
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
                 break
-        
-        if not chosen_pos:
-            empty_spots = [p for p, v in board.items() if v == ' ']
-            if empty_spots:
-                chosen_pos = random.choice(empty_spots)
 
-        board[chosen_pos] = 'O'
-        winner = check_winner(board)
-        display_pos = chosen_pos[1] + chosen_pos[0]
-        
-        game_embed = discord.Embed(title="🎮 Lượt Của Monika", description=f"*suy tư* Tôi chọn ô **{display_pos}**", color=discord.Color.purple())
-        game_embed.add_field(name="Suy Luận", value=ai_reply, inline=False)
-        game_embed.add_field(name="Bàn Cờ", value=render_board(board), inline=False)
-        
-        if winner == 'O':
-            game_embed.title = "🎭 Monika Thắng!"
-            del active_games[channel_id]
-        elif winner == "DRAW":
-            game_embed.title = "🤝 Ván Cờ Hòa"
-            del active_games[channel_id]
+            if frame_count % frame_interval == 0:
+                # Chuyển BGR (OpenCV) sang RGB (PIL)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
 
-        await ctx.send(embed=game_embed)
+                # Vẽ UI phòng học cho frame
+                subtitle = f"*Đang xem video... [{int(frame_count/fps)}s/{int(duration)}s]*"
+                img_buf = render_frame_with_mas(pil_img, subtitle_text=subtitle)
 
+                if img_buf:
+                    file = discord.File(fp=img_buf, filename="mas_video_frame.png")
+                    
+                    # Sửa trực tiếp 1 tin nhắn duy nhất để tạo hiệu ứng chuyển động mượt mà
+                    if rendered_message is None:
+                        rendered_message = await ctx.send(file=file)
+                    else:
+                        await rendered_message.edit(attachments=[file])
+
+                # Nghỉ ~0.4s giữa các frame (~2.5 fps)
+                await asyncio.sleep(0.38)
+
+            frame_count += 1
+
+        cap.release()
+        await ctx.send("*mỉm cười vỗ tay* Video chiếu xong rồi! Cậu thấy thế nào? 💚")
+
+    except Exception as e:
+        await ctx.send(f"*bối rối* Có lỗi xảy ra khi chiếu video: {e}")
+    finally:
+        if os.path.exists(temp_video_path):
+            os.remove(temp_video_path)
+
+# --- 8. Các Lệnh Điều Khiển Mode ---
+@monika_bot.command(name="render", aliases=["img"])
+async def enable_render(ctx):
+    mas_data["render_mode"] = True
+    mas_data["proactive_mode"] = True
+    mas_data["active_channel_id"] = ctx.channel.id
+    save_mas_data(mas_data)
+    await ctx.send("🖼️ **Chế độ Render UI & Proactive: BẬT**")
+
+@monika_bot.command(name="offline")
+async def enable_offline(ctx):
+    mas_data["render_mode"] = True
+    mas_data["proactive_mode"] = False
+    save_mas_data(mas_data)
+    await ctx.send("🌙 **Chế độ Render Offline: BẬT** (Tiết kiệm Quota, vẫn chơi được Minigame Video)")
+
+@monika_bot.command(name="text")
+async def enable_text(ctx):
+    mas_data["render_mode"] = False
+    mas_data["proactive_mode"] = False
+    save_mas_data(mas_data)
+    await ctx.send("💬 **Chế độ Text Tối Giản: BẬT**")
+
+# --- 9. Handling Messages ---
 @monika_bot.event
 async def on_message(message):
     if message.author == monika_bot.user:
         return
 
+    if message.content.lower().startswith('!m'):
+        await monika_bot.process_commands(message)
+        return
+
     if monika_bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         clean_content = message.content.replace(f'<@{monika_bot.user.id}>', '').strip()
         if not clean_content:
-            await message.channel.send("*mỉm cười* Cậu gọi tôi có việc gì thế? Gõ `!Mhelps` để xem các lệnh nhé!")
+            await message.channel.send("*mỉm cười* Cậu gọi tôi có việc gì thế?")
             return
 
         async with message.channel.typing():
+            mas_data["active_channel_id"] = message.channel.id
             reply = await ask_monika(clean_content)
-            response_embed = discord.Embed(title="💚 Monika", description=reply[:2048], color=discord.Color.pink())
-            await message.channel.send(embed=response_embed)
 
-    await monika_bot.process_commands(message)
+            if mas_data.get("render_mode", False):
+                img_buf = generate_mas_image(reply, chibi_state="happy")
+                if img_buf:
+                    await message.channel.send(file=discord.File(fp=img_buf, filename="monika_reply.png"))
+                    return
+
+            embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
+            await message.channel.send(embed=embed)
 
 if __name__ == "__main__":
     t_flask = threading.Thread(target=run_flask)
