@@ -108,7 +108,7 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 5. HÀM VẼ UI RENDER & THUẬT TOÁN CHIA TRANG (PAGINATION)
+# 5. HÀM VẼ UI RENDER & THUẬT TOÁN CHIA TRANG
 # ==========================================
 def split_text_into_pages(text, max_chars_per_page=140, max_pages=5):
     """
@@ -221,7 +221,7 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. DISCORD UI COMPONENT (CHUYỂN TRANG KHÔNG RENDER LẠI ẢNH)
+# 6. DISCORD UI COMPONENT (CHUYỂN TRANG RENDER LẠI ẢNH KHỚP VỚI CHỮ)
 # ==========================================
 class DialoguePaginationView(discord.ui.View):
     def __init__(self, pages, author_id):
@@ -245,9 +245,9 @@ class DialoguePaginationView(discord.ui.View):
         self.current_page -= 1
         self.update_buttons()
         
-        # Cập nhật nội dung chữ bên dưới tin nhắn mà KHÔNG đổi ảnh
-        content_text = f"💬 **Monika (Trang {self.current_page + 1}/{len(self.pages)}):**\n{self.pages[self.current_page]}"
-        await interaction.response.edit_message(content=content_text, view=self)
+        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        await interaction.response.edit_message(content=None, attachments=[file], view=self)
 
     @discord.ui.button(label="Trang 1/1", style=discord.ButtonStyle.secondary, disabled=True, custom_id="btn_counter")
     async def page_counter(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -262,9 +262,9 @@ class DialoguePaginationView(discord.ui.View):
         self.current_page += 1
         self.update_buttons()
         
-        # Cập nhật nội dung chữ bên dưới tin nhắn mà KHÔNG đổi ảnh
-        content_text = f"💬 **Monika (Trang {self.current_page + 1}/{len(self.pages)}):**\n{self.pages[self.current_page]}"
-        await interaction.response.edit_message(content=content_text, view=self)
+        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        await interaction.response.edit_message(content=None, attachments=[file], view=self)
 
 # ==========================================
 # 7. XỬ LÝ AI GEMINI (MODEL 3.6-FLASH)
@@ -480,7 +480,6 @@ async def on_message(message):
                     return
                 reply = await ask_monika(clean_content)
 
-            # Giới hạn tối đa 5 trang
             pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=5)
 
             if mas_data.get("render_mode", True):
