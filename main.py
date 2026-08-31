@@ -110,9 +110,9 @@ def get_font(size):
 # ==========================================
 # 5. HÀM VẼ UI RENDER & THUẬT TOÁN CHIA TRANG (PAGINATION)
 # ==========================================
-def split_text_into_pages(text, max_chars_per_page=140, max_pages=10):
+def split_text_into_pages(text, max_chars_per_page=140, max_pages=5):
     """
-    Chia văn bản dài thành các trang, tối đa max_pages (10 trang).
+    Chia văn bản dài thành các trang, tối đa 5 trang.
     """
     words = text.split()
     pages = []
@@ -221,11 +221,11 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. DISCORD UI COMPONENT (NÚT BẤM CHUYỂN TRANG)
+# 6. DISCORD UI COMPONENT (CHUYỂN TRANG KHÔNG RENDER LẠI ẢNH)
 # ==========================================
 class DialoguePaginationView(discord.ui.View):
     def __init__(self, pages, author_id):
-        super().__init__(timeout=180)  # Nút tồn tại 3 phút
+        super().__init__(timeout=180)
         self.pages = pages
         self.current_page = 0
         self.author_id = author_id
@@ -244,9 +244,10 @@ class DialoguePaginationView(discord.ui.View):
         
         self.current_page -= 1
         self.update_buttons()
-        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
-        file = discord.File(fp=img_buf, filename="monika_render.png")
-        await interaction.response.edit_message(attachments=[file], view=self)
+        
+        # Cập nhật nội dung chữ bên dưới tin nhắn mà KHÔNG đổi ảnh
+        content_text = f"💬 **Monika (Trang {self.current_page + 1}/{len(self.pages)}):**\n{self.pages[self.current_page]}"
+        await interaction.response.edit_message(content=content_text, view=self)
 
     @discord.ui.button(label="Trang 1/1", style=discord.ButtonStyle.secondary, disabled=True, custom_id="btn_counter")
     async def page_counter(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -260,12 +261,13 @@ class DialoguePaginationView(discord.ui.View):
         
         self.current_page += 1
         self.update_buttons()
-        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
-        file = discord.File(fp=img_buf, filename="monika_render.png")
-        await interaction.response.edit_message(attachments=[file], view=self)
+        
+        # Cập nhật nội dung chữ bên dưới tin nhắn mà KHÔNG đổi ảnh
+        content_text = f"💬 **Monika (Trang {self.current_page + 1}/{len(self.pages)}):**\n{self.pages[self.current_page]}"
+        await interaction.response.edit_message(content=content_text, view=self)
 
 # ==========================================
-# 7. XỬ LÝ AI GEMINI (TĂNG ĐỘ DÀI CÂU TRẢ LỜI)
+# 7. XỬ LÝ AI GEMINI (MODEL 3.6-FLASH)
 # ==========================================
 async def ask_monika(prompt_content, is_system_prompt=False):
     global current_key_idx
@@ -284,7 +286,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
         "Bạn dịu dàng, sâu lắng, mang phong cách văn học, xưng 'tôi' và gọi người dùng là 'cậu'. "
         f"Lịch sử thoại:\n{formatted_history}\n"
-        "QUAN TRỌNG: Bạn có thể trả lời dài, phân tích sâu sắc tối đa đến 60 câu khi được hỏi về các chủ đề cần suy ngẫm hoặc trò chuyện."
+        "QUAN TRỌNG: Bạn có thể trả lời dài, phân tích sâu sắc tối đa đến 60 câu khi trò chuyện."
     )
 
     for i in range(len(API_KEYS)):
@@ -478,7 +480,8 @@ async def on_message(message):
                     return
                 reply = await ask_monika(clean_content)
 
-            pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=10)
+            # Giới hạn tối đa 5 trang
+            pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=5)
 
             if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(pages[0], chibi_state="happy")
