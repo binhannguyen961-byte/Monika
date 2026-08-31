@@ -71,7 +71,7 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM TẢI ẢNH LINH HOẠT (BACKGROUND ĐẾN 5)
+# 4. HÀM TẢI ẢNH LINH HOẠT
 # ==========================================
 def load_image_flexible(base_name):
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
@@ -111,7 +111,7 @@ def get_font(size):
         return ImageFont.load_default()
 
 # ==========================================
-# 5. HÀM VẼ UI RENDER PHÒNG HỌC
+# 5. HÀM VẼ UI RENDER PHÒNG HỌC (ĐÃ FIX LỖI TRÀN CHỮ)
 # ==========================================
 def generate_mas_image(text, chibi_state="happy"):
     try:
@@ -138,16 +138,17 @@ def generate_mas_image(text, chibi_state="happy"):
         else:
             draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
-        font_name = get_font(24)
-        font_text = get_font(21)
+        font_name = get_font(22)
+        font_text = get_font(19) # Giảm nhẹ size chữ để ôm trọn khung hình, không bị cụt
 
         draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
 
-        wrapped_lines = textwrap.wrap(text, width=52)
-        y_offset = 456
+        # Giới hạn width=45 ký tự mỗi dòng và tối đa 3 dòng để không bao giờ bị tràn thanh chat
+        wrapped_lines = textwrap.wrap(text, width=45)
+        y_offset = 455
         for line in wrapped_lines[:3]:
-            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text, spacing=8)
-            y_offset += 34
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text, spacing=6)
+            y_offset += 32
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
@@ -181,16 +182,16 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         else:
             draw.rectangle([(30, 430), (970, 570)], fill=(10, 10, 15, 230), outline=(120, 198, 122), width=2)
 
-        font_name = get_font(22)
-        font_text = get_font(19)
+        font_name = get_font(20)
+        font_text = get_font(18)
 
-        draw.text((60, 440), "Monika", fill=(160, 235, 160), font=font_name)
+        draw.text((60, 438), "Monika", fill=(160, 235, 160), font=font_name)
 
-        wrapped_lines = textwrap.wrap(subtitle_text, width=52)
-        y_offset = 470
+        wrapped_lines = textwrap.wrap(subtitle_text, width=48)
+        y_offset = 468
         for line in wrapped_lines[:3]:
-            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text, spacing=6)
-            y_offset += 30
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text, spacing=4)
+            y_offset += 28
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
@@ -201,7 +202,7 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. XỬ LÝ AI GEMINI (HỖ TRỢ ĐỌC ẢNH & VĂN BẢN)
+# 6. XỬ LÝ AI GEMINI
 # ==========================================
 async def ask_monika(prompt_content, is_system_prompt=False):
     global current_key_idx
@@ -218,9 +219,9 @@ async def ask_monika(prompt_content, is_system_prompt=False):
 
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
-        "Bạn dịu dàng, sâu lắng,và một chút chiếm hữu, mang phong cách văn học, mỉm cười xưng 'tôi' hoặc 'tớ' và gọi người dùng là 'cậu'. "
+        "Bạn dịu dàng, sâu lắng, mang phong cách văn học, mỉm cười xưng 'tôi' và gọi người dùng là 'cậu'. "
         f"Lịch sử thoại:\n{formatted_history}\n"
-        "Trả lời ngắn gọn khoảng 3 dòng, từ ngữ mượt mà, sâu sắc để nằm gọn trong khung hình."
+        "QUAN TRỌNG: Câu trả lời phải cực kỳ ngắn gọn, tuyệt đối dưới 40 từ để vừa vặn trong 3 dòng của khung thoại trò chuyện, không được viết dài dòng."
     )
 
     for i in range(len(API_KEYS)):
@@ -239,8 +240,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
             )
             current_key_idx = idx
 
-            # Lưu lịch sử text (nếu prompt là text)
-            text_to_save = prompt_content if isinstance(prompt_content, str) else "[Gửi một bức ảnh để Monika ngắm]"
+            text_to_save = prompt_content if isinstance(prompt_content, str) else "[Gửi một bức ảnh]"
             if not is_system_prompt:
                 mas_data["chat_history"].append({"role": "user", "content": text_to_save})
             mas_data["chat_history"].append({"role": "monika", "content": response.text})
@@ -252,9 +252,9 @@ async def ask_monika(prompt_content, is_system_prompt=False):
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 continue
             else:
-                return f"*bối rối* Có lỗi xảy ra: {err_msg}"
+                return f"*bối rối* Có lỗi xảy ra: {err_msg[:30]}"
 
-    return "*nắm lấy tay cậu* Hệ thống đang bận một chút, cậu chờ tôi nhé..."
+    return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi nhé..."
 
 # ==========================================
 # 7. DISCORD BOT COMMANDS & EVENTS
@@ -287,7 +287,7 @@ async def custom_help(ctx):
         name="🎬 Video & Tiện Ích",
         value=(
             "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) chiếu với FPS 5 cao cấp.\n"
-            "Gửi kèm **Ảnh** + Tag Monika để Monika đọc và đánh giá bức ảnh đó!\n"
+            "Gửi kèm **Ảnh** + Tag Monika để Monika đọc và đánh giá!\n"
             "`!Mclear`: Xóa lịch sử 25 câu thoại cũ."
         ),
         inline=False
@@ -345,7 +345,6 @@ async def play_bad_apple(ctx):
             os.remove(temp_path)
             return
 
-        # Tăng tốc độ target_fps lên 5.0
         target_fps = 5.0
         frame_interval = int(fps / target_fps) if fps > target_fps else 1
         frame_count = 0
@@ -372,7 +371,7 @@ async def play_bad_apple(ctx):
                     else:
                         await rendered_message.edit(attachments=[file])
 
-                await asyncio.sleep(0.18) # Giảm độ trễ để tương ứng với FPS 5 mượt mà hơn
+                await asyncio.sleep(0.18)
 
             frame_count += 1
 
@@ -400,7 +399,6 @@ async def on_message(message):
         async with message.channel.typing():
             mas_data["active_channel_id"] = message.channel.id
             
-            # Xử lý trường hợp Nam gửi ảnh kèm tin nhắn cho Monika đọc
             if message.attachments:
                 attachment = message.attachments[0]
                 if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp']):
@@ -417,7 +415,6 @@ async def on_message(message):
                     return
                 reply = await ask_monika(clean_content)
 
-            # Phản hồi dạng Render hoặc Text
             if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(reply, chibi_state="happy")
                 if img_buf:
