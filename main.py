@@ -118,12 +118,11 @@ def generate_mas_image(text, chibi_state="happy"):
         else:
             draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
-        font_name = get_font(24)  # Tên nhân vật nổi bật hơn
-        font_text = get_font(21)  # Tăng kích thước chữ nội dung to rõ, dễ đọc
+        font_name = get_font(24)
+        font_text = get_font(21)
 
         draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
 
-        # Văn bản chia dòng gọn gàng hơn (width=52) kết hợp khoảng cách dòng thoáng đãng mang chất thơ
         wrapped_lines = textwrap.wrap(text, width=52)
         y_offset = 456
         for line in wrapped_lines[:3]:
@@ -346,12 +345,12 @@ async def play_bad_apple(ctx):
                 sub = f"*Đang xem video... [{int(frame_count/fps)}s/{int(duration)}s]*"
                 img_buf = render_frame_with_mas(pil_img, subtitle_text=sub)
 
-                    if img_buf:
-                        file = discord.File(fp=img_buf, filename="render_frame.png")
-                        if rendered_message is None:
-                            rendered_message = await ctx.send(file=file)
-                        else:
-                            await rendered_message.edit(attachments=[file])
+                if img_buf:
+                    file = discord.File(fp=img_buf, filename="render_frame.png")
+                    if rendered_message is None:
+                        rendered_message = await ctx.send(file=file)
+                    else:
+                        await rendered_message.edit(attachments=[file])
 
                 await asyncio.sleep(0.38)
 
