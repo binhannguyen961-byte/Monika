@@ -75,7 +75,7 @@ mas_data = load_mas_data()
 # 4. HÀM VẼ UI PHÒNG HỌC & RENDER FRAME (PIL)
 # ==========================================
 def generate_mas_image(text, chibi_state="happy"):
-    """Vẽ ảnh phòng học + Monika Chibi + Khung thoại thoại thường"""
+    """Vẽ ảnh phòng học + Monika Chibi + Khung thoại thông thường"""
     try:
         bg = Image.open("assets/background.png").convert("RGBA")
         chibi = Image.open(f"assets/monika_{chibi_state}.png").convert("RGBA")
@@ -141,7 +141,7 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Đang chiếu video cho c�
         return None
 
 # ==========================================
-# 5. XỬ LÝ AI GEMINI (25 Tin Nhắn Lịch Sử)
+# 5. XỬ LÝ AI GEMINI (Dùng gemini-3.6-flash)
 # ==========================================
 async def ask_monika(prompt, is_system_prompt=False):
     global current_key_idx
@@ -174,7 +174,7 @@ async def ask_monika(prompt, is_system_prompt=False):
             client = genai.Client(api_key=active_key)
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model='gemini-2.5-flash',
+                model='gemini-3.6-flash',  # Đã cập nhật thành 3.6 theo yêu cầu API
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction
