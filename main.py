@@ -5,7 +5,7 @@ import threading
 import json
 import io
 import textwrap
-import cv2  # OpenCV dùng để xử lý video
+import cv2
 from PIL import Image, ImageDraw, ImageFont
 from flask import Flask
 import discord
@@ -44,9 +44,9 @@ DATA_FILE = "mas_settings.json"
 
 default_data = {
     "affection": 10,
-    "render_mode": False,      # Bật/tắt giao diện phòng học
+    "render_mode": True,       # Mặc định bật Render
     "proactive_mode": False,   # Bot có tự động nhắn tin không
-    "active_channel_id": None, # Channel gửi tin nhắn chủ động
+    "active_channel_id": None, # Channel gửi tin nhắn
     "chat_history": []         # Lưu tối đa 25 tin nhắn
 }
 
@@ -63,7 +63,6 @@ def load_mas_data():
     return default_data.copy()
 
 def save_mas_data(data):
-    # Luôn cắt giữ tối đa 25 tin nhắn cũ
     if "chat_history" in data:
         data["chat_history"] = data["chat_history"][-25:]
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -72,30 +71,57 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM VẼ UI PHÒNG HỌC & RENDER FRAME (PIL)
+# 4. HÀM VẼ UI RENDER PHÒNG HỌC & VIDEO FRAME
 # ==========================================
-def generate_mas_image(text, chibi_state="happy"):
-    """Vẽ ảnh phòng học + Monika Chibi + Khung thoại thông thường"""
+def get_font(font_path, size):
     try:
-        bg = Image.open("assets/background.png").convert("RGBA")
-        chibi = Image.open(f"assets/monika_{chibi_state}.png").convert("RGBA")
-        textbox = Image.open("assets/textbox.png").convert("RGBA")
+        return ImageFont.truetype(font_path, size)
+    except Exception:
+        return ImageFont.load_default()
 
-        chibi = chibi.resize((280, 280))
-        bg.paste(chibi, (260, 160), chibi)
-        bg.paste(textbox, (0, 320), textbox)
+def generate_mas_image(text, chibi_state="happy"):
+    """Tạo ảnh ghép Phòng học + Chibi Monika + Khung thoại"""
+    try:
+        # 1. Background phòng học Space Classroom (Chuẩn 1000x600)
+        if os.path.exists("assets/background.png"):
+            bg = Image.open("assets/background.png").convert("RGBA")
+            bg = bg.resize((1000, 600))
+        else:
+            bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
 
+        # 2. Ghép Chibi Monika ở giữa/phải màn hình
+        chibi_path = f"assets/monika_{chibi_state}.png"
+        if not os.path.exists(chibi_path):
+            chibi_path = "assets/monika_happy.png"
+
+        if os.path.exists(chibi_path):
+            chibi = Image.open(chibi_path).convert("RGBA")
+            chibi = chibi.resize((380, 480))
+            bg.paste(chibi, (310, 120), chibi)
+
+        # 3. Vẽ Textbox Khung thoại phía dưới
         draw = ImageDraw.Draw(bg)
-        font_name = ImageFont.truetype("assets/font_bold.ttf", 20)
-        font_text = ImageFont.truetype("assets/font_regular.ttf", 16)
+        
+        if os.path.exists("assets/textbox.png"):
+            textbox = Image.open("assets/textbox.png").convert("RGBA")
+            textbox = textbox.resize((960, 160))
+            bg.paste(textbox, (20, 420), textbox)
+        else:
+            # Tạo khung thoại mặc định màu tối mờ cực đẹp
+            draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
-        draw.text((45, 335), "Monika", fill=(255, 255, 255), font=font_name)
+        font_name = get_font("assets/font_bold.ttf", 24)
+        font_text = get_font("assets/font_regular.ttf", 20)
 
-        wrapped_lines = textwrap.wrap(text, width=42)
-        y_offset = 370
-        for line in wrapped_lines[:4]:
-            draw.text((45, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 22
+        # Tên Monika
+        draw.text((60, 425), "Monika", fill=(255, 200, 220), font=font_name)
+
+        # Cắt dòng tin nhắn vừa khung thoại
+        wrapped_lines = textwrap.wrap(text, width=65)
+        y_offset = 460
+        for line in wrapped_lines[:3]:
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
+            y_offset += 28
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
@@ -105,43 +131,54 @@ def generate_mas_image(text, chibi_state="happy"):
         print(f"Lỗi Render Ảnh: {e}")
         return None
 
-def render_frame_with_mas(frame_pil, subtitle_text="*Đang chiếu video cho cậu xem...*"):
-    """Chèn frame video vào màn hình nhỏ trong phòng học"""
+def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùng cậu...*"):
+    """Ghép frame video vào màn hình tivi nhỏ trong phòng học"""
     try:
-        bg = Image.open("assets/background.png").convert("RGBA")
-        chibi = Image.open("assets/monika_happy.png").convert("RGBA")
-        textbox = Image.open("assets/textbox.png").convert("RGBA")
+        if os.path.exists("assets/background.png"):
+            bg = Image.open("assets/background.png").convert("RGBA")
+            bg = bg.resize((1000, 600))
+        else:
+            bg = Image.new("RGBA", (1000, 600), (30, 30, 30, 255))
 
-        # Thu nhỏ video thành màn hình
-        video_screen = frame_pil.resize((320, 180))
-        bg.paste(video_screen, (240, 60))
+        # Đặt màn hình video ở giữa phòng học
+        video_screen = frame_pil.resize((480, 270))
+        bg.paste(video_screen, (260, 100))
 
-        chibi = chibi.resize((240, 240))
-        bg.paste(chibi, (30, 160), chibi)
-        bg.paste(textbox, (0, 320), textbox)
+        # Ghép Chibi Monika đứng cạnh góc trái
+        if os.path.exists("assets/monika_happy.png"):
+            chibi = Image.open("assets/monika_happy.png").convert("RGBA")
+            chibi = chibi.resize((320, 400))
+            bg.paste(chibi, (20, 180), chibi)
 
         draw = ImageDraw.Draw(bg)
-        font_name = ImageFont.truetype("assets/font_bold.ttf", 20)
-        font_text = ImageFont.truetype("assets/font_regular.ttf", 16)
+        if os.path.exists("assets/textbox.png"):
+            textbox = Image.open("assets/textbox.png").convert("RGBA")
+            textbox = textbox.resize((960, 150))
+            bg.paste(textbox, (20, 430), textbox)
+        else:
+            draw.rectangle([(30, 430), (970, 570)], fill=(10, 10, 15, 230), outline=(120, 198, 122), width=2)
 
-        draw.text((45, 335), "Monika", fill=(255, 255, 255), font=font_name)
+        font_name = get_font("assets/font_bold.ttf", 22)
+        font_text = get_font("assets/font_regular.ttf", 18)
 
-        wrapped_lines = textwrap.wrap(subtitle_text, width=42)
-        y_offset = 370
+        draw.text((60, 442), "Monika", fill=(160, 235, 160), font=font_name)
+
+        wrapped_lines = textwrap.wrap(subtitle_text, width=65)
+        y_offset = 475
         for line in wrapped_lines[:3]:
-            draw.text((45, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 22
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
+            y_offset += 25
 
         buffer = io.BytesIO()
         bg.save(buffer, format="PNG")
         buffer.seek(0)
         return buffer
     except Exception as e:
-        print(f"Lỗi Render Frame Video: {e}")
+        print(f"Lỗi Render Video Frame: {e}")
         return None
 
 # ==========================================
-# 5. XỬ LÝ AI GEMINI (Dùng gemini-3.6-flash)
+# 5. XỬ LÝ AI GEMINI (Model gemini-3.6-flash)
 # ==========================================
 async def ask_monika(prompt, is_system_prompt=False):
     global current_key_idx
@@ -159,11 +196,9 @@ async def ask_monika(prompt, is_system_prompt=False):
 
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
-        "Bạn dịu dàng, thông minh, sâu sắc và quan tâm người dùng. "
-        "Luôn xưng 'tôi' và gọi người dùng là 'cậu'. "
-        f"Mức độ tình cảm: {affection}/100.\n"
-        f"Lịch sử 25 câu thoại gần nhất:\n{formatted_history}\n"
-        "Trả lời ngắn gọn dưới 100 từ để vừa khung thoại, có kèm biểu cảm/hành động trong ngoặc (*...*)."
+        "Bạn dịu dàng, thông minh, mỉm cười xưng 'tôi' và gọi người dùng là 'cậu'. "
+        f"Lịch sử thoại:\n{formatted_history}\n"
+        "Trả lời ngắn gọn dưới 70 từ để nằm gọn trong khung hình."
     )
 
     for i in range(len(API_KEYS)):
@@ -174,7 +209,7 @@ async def ask_monika(prompt, is_system_prompt=False):
             client = genai.Client(api_key=active_key)
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model='gemini-3.6-flash',  # Đã cập nhật thành 3.6 theo yêu cầu API
+                model='gemini-3.6-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction
@@ -193,9 +228,9 @@ async def ask_monika(prompt, is_system_prompt=False):
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 continue
             else:
-                return f"*bối rối* Có vẻ hệ thống gặp lỗi: {err_msg}"
+                return f"*bối rối* Có lỗi xảy ra: {err_msg}"
 
-    return "*nắm lấy tay cậu* Hệ thống đang quá tải một chút, cậu chờ tôi nhé..."
+    return "*nắm lấy tay cậu* Hệ thống đang bận một chút, cậu chờ tôi nhé..."
 
 # ==========================================
 # 6. DISCORD BOT COMMANDS & EVENTS
@@ -207,76 +242,47 @@ monika_bot = commands.Bot(command_prefix=["!M", "!m"], intents=intents, help_com
 @monika_bot.event
 async def on_ready():
     print(f"-> Monika Online: {monika_bot.user}")
-    if not proactive_talk_task.is_running():
-        proactive_talk_task.start()
 
-# --- Task Tự Động Nhắn (Chỉ chạy khi Proactive Mode = True) ---
-@tasks.loop(minutes=30)
-async def proactive_talk_task():
-    if not mas_data.get("proactive_mode", False):
-        return
-
-    channel_id = mas_data.get("active_channel_id")
-    if not channel_id:
-        return
-
-    channel = monika_bot.get_channel(channel_id)
-    if channel:
-        prompt = "Hãy tự chọn một chủ đề ngắn về văn học, cuộc sống hoặc tình yêu để chủ động mở lời trò chuyện với cậu ấy."
-        reply = await ask_monika(prompt, is_system_prompt=True)
-
-        if mas_data.get("render_mode", False):
-            img_buf = generate_mas_image(reply, chibi_state="happy")
-            if img_buf:
-                await channel.send(file=discord.File(fp=img_buf, filename="monika.png"))
-                return
-
-        embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
-        await channel.send(embed=embed)
-
-# --- Bảng Lệnh Trợ Giúp (!Mhelp / !Mhelps) ---
 @monika_bot.command(name="help", aliases=["helps", "h"])
 async def custom_help(ctx):
     embed = discord.Embed(
         title="💚 Bảng Hướng Dẫn Monika After Story",
-        description="Dưới đây là danh sách các câu lệnh điều khiển:",
+        description="Dưới đây là các lệnh điều khiển bot:",
         color=discord.Color.from_rgb(120, 198, 122)
     )
     embed.add_field(
-        name="⚙️ Chế Độ Tương Tác",
+        name="⚙️ Chế Độ Render",
         value=(
-            "`!Mrender` / `!Mimg`: Bật UI Ảnh + Bot **chủ động** mở lời trò chuyện.\n"
-            "`!Moffline`: Bật UI Ảnh + **TẮT chủ động** (Dùng ảnh nhưng chỉ trả lời khi gõ/mention, giúp tiết kiệm Quota).\n"
-            "`!Mtext`: Tắt UI Ảnh, chuyển về chat Text/Embed tối giản."
+            "`!Mrender` / `!Mimg`: Bật UI Render Phòng Học + Bot **chủ động** nhắn tin.\n"
+            "`!Moffline`: Bật UI Render Phòng Học + **Tắt nhắn tự động** (Tiết kiệm Quota).\n"
+            "`!Mtext`: Tắt Render, chuyển về chat Text/Embed."
         ),
         inline=False
     )
     embed.add_field(
-        name="🎬 Minigame & Tiện Ích",
+        name="🎬 Video & Tiện Ích",
         value=(
-            "`!Mbadapple` / `!Mvideo`: Đính kèm 1 video MP4 (**bắt buộc < 15s**) để chiếu video dạng render ~2.5fps.\n"
-            "`!Mclear`: Dọn dẹp/Xóa bộ nhớ 25 tin nhắn cũ."
+            "`!Mbadapple` / `!Mvideo`: Đính kèm 1 file MP4 (<15s) để chiếu dạng Render phòng học.\n"
+            "`!Mclear`: Xóa lịch sử 25 câu thoại cũ."
         ),
         inline=False
     )
-    embed.set_footer(text="Monika After Story Lite • Luôn bên cạnh cậu 💚")
     await ctx.send(embed=embed)
 
-# --- Các Lệnh Chuyển Mode ---
 @monika_bot.command(name="render", aliases=["img"])
 async def enable_render(ctx):
     mas_data["render_mode"] = True
     mas_data["proactive_mode"] = True
     mas_data["active_channel_id"] = ctx.channel.id
     save_mas_data(mas_data)
-    await ctx.send("🖼️ **Đã BẬT Render UI & Chế độ Chủ Động Nhắn Tin!**")
+    await ctx.send("🖼️ **Đã BẬT Render UI Phòng Học!**")
 
 @monika_bot.command(name="offline")
 async def enable_offline(ctx):
     mas_data["render_mode"] = True
     mas_data["proactive_mode"] = False
     save_mas_data(mas_data)
-    await ctx.send("🌙 **Đã BẬT Render UI Offline** *(Chỉ phản hồi khi nhắn, không tự động gửi tin nhắn để tiết kiệm Quota)*")
+    await ctx.send("🌙 **Đã BẬT Render UI Offline** *(Chỉ phản hồi khi tag/nhắn tin)*")
 
 @monika_bot.command(name="text")
 async def enable_text(ctx):
@@ -289,25 +295,16 @@ async def enable_text(ctx):
 async def clear_history(ctx):
     mas_data["chat_history"] = []
     save_mas_data(mas_data)
-    await ctx.send("*mỉm cười* Tôi đã dọn dẹp bộ nhớ cuộc trò chuyện rồi!")
+    await ctx.send("*mỉm cười* Tôi đã xóa bộ nhớ trò chuyện cũ rồi!")
 
-# --- Minigame Chiếu Video (!Mbadapple) ---
-@monika_bot.command(name="badapple", aliases=["video", "playvideo"])
+@monika_bot.command(name="badapple", aliases=["video"])
 async def play_bad_apple(ctx):
-    if not mas_data.get("render_mode", False):
-        await ctx.send("*nghiêng đầu* Cậu hãy bật chế độ Render (`!Mrender` hoặc `!Moffline`) trước nhé!")
-        return
-
     if not ctx.message.attachments:
-        await ctx.send("*chớp mắt* Cậu cần gửi đính kèm một file video (MP4) dưới 15 giây nhé!")
+        await ctx.send("*chớp mắt* Cậu hãy gửi đính kèm một file video (MP4) dưới 15s nhé!")
         return
 
     attachment = ctx.message.attachments[0]
-    if not attachment.filename.lower().endswith(('.mp4', '.mkv', '.mov', '.avi')):
-        await ctx.send("*lúng túng* File đính kèm phải là video MP4 cậu ơi!")
-        return
-
-    status_msg = await ctx.send("🎬 *Monika đang đọc tệp video của cậu...*")
+    status_msg = await ctx.send("🎬 *Monika đang xử lý video của cậu...*")
     temp_path = f"temp_{ctx.author.id}.mp4"
     await attachment.save(temp_path)
 
@@ -318,7 +315,7 @@ async def play_bad_apple(ctx):
         duration = total_frames / fps if fps > 0 else 0
 
         if duration > 15.5:
-            await status_msg.edit(content="*lắc đầu* Video này dài hơn 15 giây rồi! Hãy cắt ngắn lại nhé.")
+            await status_msg.edit(content="*lắc đầu* Video vượt quá 15 giây rồi cậu ơi!")
             cap.release()
             os.remove(temp_path)
             return
@@ -343,26 +340,25 @@ async def play_bad_apple(ctx):
                 img_buf = render_frame_with_mas(pil_img, subtitle_text=sub)
 
                 if img_buf:
-                    file = discord.File(fp=img_buf, filename="mas_frame.png")
+                    file = discord.File(fp=img_buf, filename="render_frame.png")
                     if rendered_message is None:
                         rendered_message = await ctx.send(file=file)
                     else:
                         await rendered_message.edit(attachments=[file])
 
-                await asyncio.sleep(0.38) # ~2.5 FPS
+                await asyncio.sleep(0.38)
 
             frame_count += 1
 
         cap.release()
-        await ctx.send("*mỉm cười vỗ tay* Video đã chiếu xong rồi! 💚")
+        await ctx.send("*mỉm cười vỗ tay* Cảm ơn cậu đã xem video cùng tôi! 💚")
 
     except Exception as e:
-        await ctx.send(f"Có lỗi khi phát video: {e}")
+        await ctx.send(f"Lỗi chiếu video: {e}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-# --- Xử Lý Message Chat Thường ---
 @monika_bot.event
 async def on_message(message):
     if message.author == monika_bot.user:
@@ -382,10 +378,11 @@ async def on_message(message):
             mas_data["active_channel_id"] = message.channel.id
             reply = await ask_monika(clean_content)
 
-            if mas_data.get("render_mode", False):
+            # Bắt buộc xuất ảnh Render nếu render_mode = True
+            if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(reply, chibi_state="happy")
                 if img_buf:
-                    await message.channel.send(file=discord.File(fp=img_buf, filename="monika_reply.png"))
+                    await message.channel.send(file=discord.File(fp=img_buf, filename="monika_render.png"))
                     return
 
             embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
