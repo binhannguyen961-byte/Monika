@@ -71,7 +71,7 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM VẼ UI RENDER PHÒNG HỌC & VIDEO FRAME
+# 4. HÀM VẼ UI RENDER PHÒNG HỌC & VIDEO FRAME (.JPG)
 # ==========================================
 def get_font(font_path, size):
     try:
@@ -82,17 +82,20 @@ def get_font(font_path, size):
 def generate_mas_image(text, chibi_state="happy"):
     """Tạo ảnh ghép Phòng học + Chibi Monika + Khung thoại"""
     try:
-        # 1. Background phòng học Space Classroom (Chuẩn 1000x600)
-        if os.path.exists("assets/background.png"):
-            bg = Image.open("assets/background.png").convert("RGBA")
+        # 1. Background phòng học (Hỗ trợ .jpg và .png)
+        bg_path = "assets/background.jpg" if os.path.exists("assets/background.jpg") else "assets/background.png"
+        if os.path.exists(bg_path):
+            bg = Image.open(bg_path).convert("RGBA")
             bg = bg.resize((1000, 600))
         else:
             bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
 
-        # 2. Ghép Chibi Monika ở giữa/phải màn hình
-        chibi_path = f"assets/monika_{chibi_state}.png"
+        # 2. Ghép Chibi Monika
+        chibi_path = f"assets/monika_{chibi_state}.jpg"
         if not os.path.exists(chibi_path):
-            chibi_path = "assets/monika_happy.png"
+            chibi_path = f"assets/monika_{chibi_state}.png"
+        if not os.path.exists(chibi_path):
+            chibi_path = "assets/monika_happy.jpg" if os.path.exists("assets/monika_happy.jpg") else "assets/monika_happy.png"
 
         if os.path.exists(chibi_path):
             chibi = Image.open(chibi_path).convert("RGBA")
@@ -102,21 +105,19 @@ def generate_mas_image(text, chibi_state="happy"):
         # 3. Vẽ Textbox Khung thoại phía dưới
         draw = ImageDraw.Draw(bg)
         
-        if os.path.exists("assets/textbox.png"):
-            textbox = Image.open("assets/textbox.png").convert("RGBA")
+        textbox_path = "assets/textbox.jpg" if os.path.exists("assets/textbox.jpg") else "assets/textbox.png"
+        if os.path.exists(textbox_path):
+            textbox = Image.open(textbox_path).convert("RGBA")
             textbox = textbox.resize((960, 160))
             bg.paste(textbox, (20, 420), textbox)
         else:
-            # Tạo khung thoại mặc định màu tối mờ cực đẹp
             draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
         font_name = get_font("assets/font_bold.ttf", 24)
         font_text = get_font("assets/font_regular.ttf", 20)
 
-        # Tên Monika
         draw.text((60, 425), "Monika", fill=(255, 200, 220), font=font_name)
 
-        # Cắt dòng tin nhắn vừa khung thoại
         wrapped_lines = textwrap.wrap(text, width=65)
         y_offset = 460
         for line in wrapped_lines[:3]:
@@ -134,25 +135,26 @@ def generate_mas_image(text, chibi_state="happy"):
 def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùng cậu...*"):
     """Ghép frame video vào màn hình tivi nhỏ trong phòng học"""
     try:
-        if os.path.exists("assets/background.png"):
-            bg = Image.open("assets/background.png").convert("RGBA")
+        bg_path = "assets/background.jpg" if os.path.exists("assets/background.jpg") else "assets/background.png"
+        if os.path.exists(bg_path):
+            bg = Image.open(bg_path).convert("RGBA")
             bg = bg.resize((1000, 600))
         else:
             bg = Image.new("RGBA", (1000, 600), (30, 30, 30, 255))
 
-        # Đặt màn hình video ở giữa phòng học
         video_screen = frame_pil.resize((480, 270))
         bg.paste(video_screen, (260, 100))
 
-        # Ghép Chibi Monika đứng cạnh góc trái
-        if os.path.exists("assets/monika_happy.png"):
-            chibi = Image.open("assets/monika_happy.png").convert("RGBA")
+        chibi_path = "assets/monika_happy.jpg" if os.path.exists("assets/monika_happy.jpg") else "assets/monika_happy.png"
+        if os.path.exists(chibi_path):
+            chibi = Image.open(chibi_path).convert("RGBA")
             chibi = chibi.resize((320, 400))
             bg.paste(chibi, (20, 180), chibi)
 
         draw = ImageDraw.Draw(bg)
-        if os.path.exists("assets/textbox.png"):
-            textbox = Image.open("assets/textbox.png").convert("RGBA")
+        textbox_path = "assets/textbox.jpg" if os.path.exists("assets/textbox.jpg") else "assets/textbox.png"
+        if os.path.exists(textbox_path):
+            textbox = Image.open(textbox_path).convert("RGBA")
             textbox = textbox.resize((960, 150))
             bg.paste(textbox, (20, 430), textbox)
         else:
@@ -186,7 +188,6 @@ async def ask_monika(prompt, is_system_prompt=False):
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
-    affection = mas_data.get("affection", 10)
     history = mas_data.get("chat_history", [])[-25:]
 
     formatted_history = ""
@@ -253,8 +254,8 @@ async def custom_help(ctx):
     embed.add_field(
         name="⚙️ Chế Độ Render",
         value=(
-            "`!Mrender` / `!Mimg`: Bật UI Render Phòng Học + Bot **chủ động** nhắn tin.\n"
-            "`!Moffline`: Bật UI Render Phòng Học + **Tắt nhắn tự động** (Tiết kiệm Quota).\n"
+            "`!Mrender` / `!Mimg`: Bật UI Render Phòng Học.\n"
+            "`!Moffline`: Bật UI Render Offline.\n"
             "`!Mtext`: Tắt Render, chuyển về chat Text/Embed."
         ),
         inline=False
@@ -262,7 +263,7 @@ async def custom_help(ctx):
     embed.add_field(
         name="🎬 Video & Tiện Ích",
         value=(
-            "`!Mbadapple` / `!Mvideo`: Đính kèm 1 file MP4 (<15s) để chiếu dạng Render phòng học.\n"
+            "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) để chiếu dạng Render phòng học.\n"
             "`!Mclear`: Xóa lịch sử 25 câu thoại cũ."
         ),
         inline=False
@@ -282,7 +283,7 @@ async def enable_offline(ctx):
     mas_data["render_mode"] = True
     mas_data["proactive_mode"] = False
     save_mas_data(mas_data)
-    await ctx.send("🌙 **Đã BẬT Render UI Offline** *(Chỉ phản hồi khi tag/nhắn tin)*")
+    await ctx.send("🌙 **Đã BẬT Render UI Offline**")
 
 @monika_bot.command(name="text")
 async def enable_text(ctx):
@@ -378,7 +379,6 @@ async def on_message(message):
             mas_data["active_channel_id"] = message.channel.id
             reply = await ask_monika(clean_content)
 
-            # Bắt buộc xuất ảnh Render nếu render_mode = True
             if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(reply, chibi_state="happy")
                 if img_buf:
