@@ -44,10 +44,10 @@ DATA_FILE = "mas_settings.json"
 
 default_data = {
     "affection": 10,
-    "render_mode": True,       # Mặc định bật Render
-    "proactive_mode": False,   # Bot có tự động nhắn tin không
-    "active_channel_id": None, # Channel gửi tin nhắn
-    "chat_history": []         # Lưu tối đa 25 tin nhắn
+    "render_mode": True,       
+    "proactive_mode": False,   
+    "active_channel_id": None, 
+    "chat_history": []         
 }
 
 def load_mas_data():
@@ -71,55 +71,67 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM VẼ UI RENDER PHÒNG HỌC (PHONG CÁCH VĂN HỌC)
+# 4. HÀM HỖ TRỢ TẢI ẢNH (LINH ĐỘNG .PNG, .JPG, .JPEG) & FONT
 # ==========================================
+def load_image_flexible(base_name):
+    """Tự động tìm file ảnh với đuôi .png, .jpg hoặc .jpeg trong thư mục assets"""
+    for ext in [".png", ".jpg", ".jpeg"]:
+        path = os.path.join("assets", base_name + ext)
+        if os.path.exists(path):
+            try:
+                return Image.open(path).convert("RGBA")
+            except Exception:
+                pass
+    return None
+
 def get_font(size):
-    """Ưu tiên tìm font tiếng Việt trong thư mục assets để hiển thị sắc nét"""
-    for font_name in ["font_regular.ttf", "arial.ttf", "Roboto-Regular.ttf"]:
+    """Ưu tiên tìm font tiếng Việt tùy chỉnh (font_regular.ttf) để chống lỗi chữ ô vuông"""
+    for font_name in ["font_regular.ttf", "arial.ttf", "DejaVuSans.ttf", "Roboto-Regular.ttf"]:
         font_path = os.path.join("assets", font_name)
         if os.path.exists(font_path):
             try:
                 return ImageFont.truetype(font_path, size)
             except Exception:
                 pass
-    return ImageFont.load_default()
-
-def generate_mas_image(text, chibi_state="happy"):
-    """Tạo ảnh ghép Phòng học + Chibi Monika + Khung thoại chữ to, phong cách văn học"""
+    # Fallback cuối cùng nếu không tìm thấy font nào trong assets
     try:
-        # 1. Background phòng học (Hỗ trợ .jpg và .png)
-        bg_path = "assets/background.jpg" if os.path.exists("assets/background.jpg") else "assets/background.png"
-        if os.path.exists(bg_path):
-            bg = Image.open(bg_path).convert("RGBA")
+        return ImageFont.load_default()
+    except Exception:
+        return ImageFont.load_default()
+
+# ==========================================
+# 5. HÀM VẼ UI RENDER PHÒNG HỌC (SỬA LỖI FONT & ẢNH)
+# ==========================================
+def generate_mas_image(text, chibi_state="happy"):
+    try:
+        # 1. Nạp Background linh động
+        bg = load_image_flexible("background")
+        if bg:
             bg = bg.resize((1000, 600))
         else:
             bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
 
-        # 2. Ghép Chibi Monika
-        chibi_path = f"assets/monika_{chibi_state}.jpg"
-        if not os.path.exists(chibi_path):
-            chibi_path = f"assets/monika_{chibi_state}.png"
-        if not os.path.exists(chibi_path):
-            chibi_path = "assets/monika_happy.jpg" if os.path.exists("assets/monika_happy.jpg") else "assets/monika_happy.png"
-
-        if os.path.exists(chibi_path):
-            chibi = Image.open(chibi_path).convert("RGBA")
+        # 2. Nạp Chibi Monika linh động (vd: monika_happy.png hoặc monika_happy.jpg)
+        chibi = load_image_flexible(f"monika_{chibi_state}")
+        if not chibi:
+            chibi = load_image_flexible("monika_happy")
+        
+        if chibi:
             chibi = chibi.resize((380, 480))
             bg.paste(chibi, (310, 120), chibi)
 
-        # 3. Vẽ Textbox Khung thoại phía dưới
+        # 3. Vẽ Textbox & Text văn học
         draw = ImageDraw.Draw(bg)
         
-        textbox_path = "assets/textbox.jpg" if os.path.exists("assets/textbox.jpg") else "assets/textbox.png"
-        if os.path.exists(textbox_path):
-            textbox = Image.open(textbox_path).convert("RGBA")
+        textbox = load_image_flexible("textbox")
+        if textbox:
             textbox = textbox.resize((960, 160))
             bg.paste(textbox, (20, 420), textbox)
         else:
             draw.rectangle([(30, 410), (970, 570)], fill=(15, 15, 25, 220), outline=(255, 180, 200), width=2)
 
         font_name = get_font(24)
-        font_text = get_font(21)
+        font_text = get_font(21)  # Kích thước chữ to rõ, văn học
 
         draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
 
@@ -138,11 +150,9 @@ def generate_mas_image(text, chibi_state="happy"):
         return None
 
 def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùng cậu...*"):
-    """Ghép frame video vào màn hình tivi nhỏ trong phòng học"""
     try:
-        bg_path = "assets/background.jpg" if os.path.exists("assets/background.jpg") else "assets/background.png"
-        if os.path.exists(bg_path):
-            bg = Image.open(bg_path).convert("RGBA")
+        bg = load_image_flexible("background")
+        if bg:
             bg = bg.resize((1000, 600))
         else:
             bg = Image.new("RGBA", (1000, 600), (30, 30, 30, 255))
@@ -150,16 +160,14 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         video_screen = frame_pil.resize((480, 270))
         bg.paste(video_screen, (260, 100))
 
-        chibi_path = "assets/monika_happy.jpg" if os.path.exists("assets/monika_happy.jpg") else "assets/monika_happy.png"
-        if os.path.exists(chibi_path):
-            chibi = Image.open(chibi_path).convert("RGBA")
+        chibi = load_image_flexible("monika_happy")
+        if chibi:
             chibi = chibi.resize((320, 400))
             bg.paste(chibi, (20, 180), chibi)
 
         draw = ImageDraw.Draw(bg)
-        textbox_path = "assets/textbox.jpg" if os.path.exists("assets/textbox.jpg") else "assets/textbox.png"
-        if os.path.exists(textbox_path):
-            textbox = Image.open(textbox_path).convert("RGBA")
+        textbox = load_image_flexible("textbox")
+        if textbox:
             textbox = textbox.resize((960, 150))
             bg.paste(textbox, (20, 430), textbox)
         else:
@@ -185,7 +193,7 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 5. XỬ LÝ AI GEMINI (Model gemini-3.6-flash)
+# 6. XỬ LÝ AI GEMINI (Model gemini-3.6-flash)
 # ==========================================
 async def ask_monika(prompt, is_system_prompt=False):
     global current_key_idx
@@ -239,7 +247,7 @@ async def ask_monika(prompt, is_system_prompt=False):
     return "*nắm lấy tay cậu* Hệ thống đang bận một chút, cậu chờ tôi nhé..."
 
 # ==========================================
-# 6. DISCORD BOT COMMANDS & EVENTS
+# 7. DISCORD BOT COMMANDS & EVENTS
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -394,7 +402,7 @@ async def on_message(message):
             await message.channel.send(embed=embed)
 
 # ==========================================
-# 7. KHỞI CHẠY BOT
+# 8. KHỞI CHẠY BOT
 # ==========================================
 if __name__ == "__main__":
     t_flask = threading.Thread(target=run_flask)
