@@ -71,14 +71,14 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM TẢI ẢNH LINH HOẠT (HỖ TRỢ RANDOM NỀN & ĐUÔI HOA)
+# 4. HÀM TẢI ẢNH LINH HOẠT (MỞ RỘNG BACKGROUND ĐẾN 5)
 # ==========================================
 def load_image_flexible(base_name):
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
     
-    # Nếu là background, tự động bốc ngẫu nhiên giữa background_1 và background_2
+    # Nếu là background, tự động bốc ngẫu nhiên từ background_1 đến background_5
     if base_name == "background":
-        choices = ["background_1", "background_2", "background"]
+        choices = [f"background_{i}" for i in range(1, 6)] + ["background"]
         random.shuffle(choices)
         for choice in choices:
             for ext in extensions:
