@@ -71,12 +71,11 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM TẢI ẢNH LINH HOẠT (MỞ RỘNG BACKGROUND ĐẾN 5)
+# 4. HÀM TẢI ẢNH LINH HOẠT (BACKGROUND ĐẾN 5)
 # ==========================================
 def load_image_flexible(base_name):
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
     
-    # Nếu là background, tự động bốc ngẫu nhiên từ background_1 đến background_5
     if base_name == "background":
         choices = [f"background_{i}" for i in range(1, 6)] + ["background"]
         random.shuffle(choices)
@@ -89,7 +88,6 @@ def load_image_flexible(base_name):
                     except Exception:
                         pass
                         
-    # Các ảnh khác quét bình thường
     for ext in extensions:
         path = os.path.join("assets", base_name + ext)
         if os.path.exists(path):
@@ -203,20 +201,20 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. XỬ LÝ AI GEMINI (Model gemini-3.6-flash)
+# 6. XỬ LÝ AI GEMINI (HỖ TRỢ ĐỌC ẢNH & VĂN BẢN)
 # ==========================================
-async def ask_monika(prompt, is_system_prompt=False):
+async def ask_monika(prompt_content, is_system_prompt=False):
     global current_key_idx
 
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
     history = mas_data.get("chat_history", [])[-25:]
-
     formatted_history = ""
     for msg in history:
-        role = "Cậu" if msg["role"] == "user" else "Monika"
-        formatted_history += f"{role}: {msg['content']}\n"
+        if isinstance(msg["content"], str):
+            role = "Cậu" if msg["role"] == "user" else "Monika"
+            formatted_history += f"{role}: {msg['content']}\n"
 
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
@@ -234,15 +232,17 @@ async def ask_monika(prompt, is_system_prompt=False):
             response = await asyncio.to_thread(
                 client.models.generate_content,
                 model='gemini-3.6-flash',
-                contents=prompt,
+                contents=prompt_content,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction
                 )
             )
             current_key_idx = idx
 
+            # Lưu lịch sử text (nếu prompt là text)
+            text_to_save = prompt_content if isinstance(prompt_content, str) else "[Gửi một bức ảnh để Monika ngắm]"
             if not is_system_prompt:
-                mas_data["chat_history"].append({"role": "user", "content": prompt})
+                mas_data["chat_history"].append({"role": "user", "content": text_to_save})
             mas_data["chat_history"].append({"role": "monika", "content": response.text})
             save_mas_data(mas_data)
 
@@ -286,7 +286,8 @@ async def custom_help(ctx):
     embed.add_field(
         name="🎬 Video & Tiện Ích",
         value=(
-            "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) để chiếu dạng Render phòng học.\n"
+            "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) chiếu với FPS 5 cao cấp.\n"
+            "Gửi kèm **Ảnh** + Tag Monika để Monika đọc và đánh giá bức ảnh đó!\n"
             "`!Mclear`: Xóa lịch sử 25 câu thoại cũ."
         ),
         inline=False
@@ -328,7 +329,7 @@ async def play_bad_apple(ctx):
         return
 
     attachment = ctx.message.attachments[0]
-    status_msg = await ctx.send("🎬 *Monika đang xử lý video của cậu...*")
+    status_msg = await ctx.send("🎬 *Monika đang xử lý video (FPS 5) của cậu...*")
     temp_path = f"temp_{ctx.author.id}.mp4"
     await attachment.save(temp_path)
 
@@ -344,12 +345,13 @@ async def play_bad_apple(ctx):
             os.remove(temp_path)
             return
 
-        target_fps = 2.5
+        # Tăng tốc độ target_fps lên 5.0
+        target_fps = 5.0
         frame_interval = int(fps / target_fps) if fps > target_fps else 1
         frame_count = 0
         rendered_message = None
 
-        await status_msg.edit(content="🍿 *Bắt đầu chiếu video!*")
+        await status_msg.edit(content="🍿 *Bắt đầu chiếu video tốc độ cao!*")
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -370,7 +372,7 @@ async def play_bad_apple(ctx):
                     else:
                         await rendered_message.edit(attachments=[file])
 
-                await asyncio.sleep(0.38)
+                await asyncio.sleep(0.18) # Giảm độ trễ để tương ứng với FPS 5 mượt mà hơn
 
             frame_count += 1
 
@@ -394,14 +396,28 @@ async def on_message(message):
 
     if monika_bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         clean_content = message.content.replace(f'<@{monika_bot.user.id}>', '').strip()
-        if not clean_content:
-            await message.channel.send("*mỉm cười* Cậu gọi tôi có việc gì thế?")
-            return
-
+        
         async with message.channel.typing():
             mas_data["active_channel_id"] = message.channel.id
-            reply = await ask_monika(clean_content)
+            
+            # Xử lý trường hợp Nam gửi ảnh kèm tin nhắn cho Monika đọc
+            if message.attachments:
+                attachment = message.attachments[0]
+                if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp']):
+                    img_bytes = await attachment.read()
+                    pil_image = Image.open(io.BytesIO(img_bytes))
+                    
+                    user_prompt = clean_content if clean_content else "Cậu nhận xét thế nào về bức ảnh này?"
+                    reply = await ask_monika([user_prompt, pil_image])
+                else:
+                    reply = await ask_monika(clean_content if clean_content else "Cậu xem file này giúp tôi nhé.")
+            else:
+                if not clean_content:
+                    await message.channel.send("*mỉm cười* Cậu gọi tôi có việc gì thế?")
+                    return
+                reply = await ask_monika(clean_content)
 
+            # Phản hồi dạng Render hoặc Text
             if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(reply, chibi_state="happy")
                 if img_buf:
