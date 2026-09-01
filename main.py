@@ -15,6 +15,16 @@ from google import genai
 from google.genai import types
 from duckduckgo_search import DDGS
 
+# Tự động tìm và load Opus library cho Docker/Linux
+if not discord.opus.is_loaded():
+    for opus_lib in ['libopus.so.0', 'libopus.so', '/usr/lib/x86_64-linux-gnu/libopus.so.0']:
+        try:
+            discord.opus.load_opus(opus_lib)
+            print(f"-> Đã load thành công Opus: {opus_lib}")
+            break
+        except Exception:
+            pass
+
 # ==========================================
 # 1. WEB SERVER NGẦM (Giữ Bot Online 24/7)
 # ==========================================
