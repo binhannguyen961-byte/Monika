@@ -110,7 +110,7 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 5. THUẬT TOÁN CHIA TRANG ĐÚNG 8 TRANG & RENDER UI
+# 5. THUẬT TOÁN CHIA TRANG LINH HOẠT (8 HOẶC 15 TRANG)
 # ==========================================
 def split_text_into_exact_pages(text, max_chars_per_page=140, target_pages=8):
     words = text.split()
@@ -189,59 +189,52 @@ def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
         print(f"Lỗi Render Ảnh: {e}")
         return None
 
-def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùng cậu...*"):
-    try:
-        bg = load_image_flexible("background")
-        if bg:
-            bg = bg.resize((1000, 600))
-        else:
-            bg = Image.new("RGBA", (1000, 600), (30, 30, 30, 255))
-
-        video_screen = frame_pil.resize((480, 270))
-        bg.paste(video_screen, (260, 100))
-
-        chibi = load_image_flexible("monika_happy")
-        if chibi:
-            chibi = chibi.resize((320, 400))
-            bg.paste(chibi, (20, 180), chibi)
-
-        draw = ImageDraw.Draw(bg)
-        textbox = load_image_flexible("textbox")
-        if textbox:
-            textbox = textbox.resize((960, 150))
-            bg.paste(textbox, (20, 430), textbox)
-        else:
-            draw.rectangle([(30, 430), (970, 570)], fill=(10, 10, 15, 230), outline=(120, 198, 122), width=2)
-
-        font_name = get_font(20)
-        font_text = get_font(18)
-
-        draw.text((60, 438), "Monika", fill=(160, 235, 160), font=font_name)
-
-        wrapped_lines = textwrap.wrap(subtitle_text, width=46)
-        y_offset = 465
-        for line in wrapped_lines[:4]:
-            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 24
-
-        buffer = io.BytesIO()
-        bg.save(buffer, format="PNG")
-        buffer.seek(0)
-        return buffer
-    except Exception as e:
-        print(f"Lỗi Render Video Frame: {e}")
-        return None
-
 # ==========================================
-# 6. DISCORD UI COMPONENT (PHÂN TRANG 8 TRANG)
+# 6. DISCORD UI COMPONENT & MODAL (PHÂN TRANG & NÚT NHẬP CÂU HỎI)
 # ==========================================
+class AnalyticsModal(discord.ui.Modal, title="Hỏi Thêm Monika Về Nội Dung Này"):
+    user_question = discord.ui.TextInput(
+        label="Nhập câu hỏi hoặc yêu cầu phân tích thêm",
+        style=discord.TextStyle.paragraph,
+        placeholder="Ví dụ: Phân tích kỹ hơn về hệ thống vũ khí hoặc động cơ...",
+        required=True,
+        max_length=500
+    )
+
+    def __init__(self, original_pages, author_id, search_img_pil=None, original_media_data=None):
+        super().__init__()
+        self.original_pages = original_pages
+        self.author_id = author_id
+        self.search_img_pil = search_img_pil
+        self.original_media_data = original_media_data
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        
+        q_text = self.user_question.value
+        prompt = f"Dựa trên nội dung/hình ảnh đã phân tích trước đó, người dùng hỏi thêm: '{q_text}'. Hãy phân tích thật sâu sắc và chi tiết, đảm bảo viết đủ dài để chia thành đúng 15 phần."
+        
+        if self.original_media_data:
+            reply = await ask_monika([prompt, self.original_media_data])
+        else:
+            reply = await ask_monika(prompt)
+
+        new_pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=15)
+        view = DialoguePaginationView(new_pages, author_id=self.author_id, search_img_pil=self.search_img_pil, media_data=self.original_media_data)
+        
+        img_buf = generate_mas_image(new_pages[0], chibi_state="happy", search_img_pil=self.search_img_pil)
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        
+        await interaction.followup.send(file=file, view=view)
+
 class DialoguePaginationView(discord.ui.View):
-    def __init__(self, pages, author_id, search_img_pil=None):
-        super().__init__(timeout=300)
+    def __init__(self, pages, author_id, search_img_pil=None, media_data=None):
+        super().__init__(timeout=400)
         self.pages = pages
         self.current_page = 0
         self.author_id = author_id
         self.search_img_pil = search_img_pil
+        self.media_data = media_data
         self.update_buttons()
 
     def update_buttons(self):
@@ -279,6 +272,14 @@ class DialoguePaginationView(discord.ui.View):
         file = discord.File(fp=img_buf, filename="monika_render.png")
         await interaction.response.edit_message(content=None, attachments=[file], view=self)
 
+    @discord.ui.button(label="💬 Hỏi Thêm", style=discord.ButtonStyle.success, custom_id="btn_ask_modal", row=1)
+    async def ask_modal_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Chỉ người trò chuyện mới được dùng nút này nhé!", ephemeral=True)
+            return
+        modal = AnalyticsModal(self.pages, self.author_id, self.search_img_pil, self.media_data)
+        await interaction.response.send_modal(modal)
+
 # ==========================================
 # 7. XỬ LÝ AI GEMINI (MODEL 3.6-FLASH)
 # ==========================================
@@ -297,8 +298,8 @@ async def ask_monika(prompt_content, is_system_prompt=False):
 
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
-        "Bạn dịu dàng, sâu lắng, xưng 'tôi' và gọi người dùng là 'cậu'. "
-        "QUY TẮC BẮT BUỘC: Bạn phải viết một đoạn văn dài vừa đủ, phong phú nội dung, để khi hệ thống chia nhỏ thành các đoạn ngắn, nó vừa vặn tạo thành đúng 8 phần (8 trang thoại). Không được viết quá ngắn."
+        "Bạn dịu dàng, sâu lắng, thông minh, xưng 'tôi' và gọi người dùng là 'cậu'. "
+        "QUY TẮC BẮT BUỘC: Hãy phân tích thật sâu sắc, chi tiết, chuyên sâu về mặt kỹ thuật, chiến thuật hoặc thông số nếu có yêu cầu phân tích, đảm bảo viết một bài văn dài phong phú để chia đều thành 15 phần chính xác."
         f"\nLịch sử thoại:\n{formatted_history}"
     )
 
@@ -335,39 +336,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
     return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi nhé..."
 
 # ==========================================
-# 8. MINI-GAME CỜ VUA (CHESS LOGIC GIAO DIỆN TỌA ĐỘ)
-# ==========================================
-active_chess_games = {} # channel_id -> game_state
-
-class ChessGame:
-    def __init__(self):
-        # Bàn cờ 8x8 đơn giản thu gọn hoặc chuẩn (Sử dụng ký hiệu quân cờ Unicode)
-        # Quân Trắng (Người chơi - W), Quân Đen (Monika - B)
-        self.board = [
-            ["♜", "♞", "♝", "♛", "♚", "♝", "♞", "♜"],
-            ["♟", "♟", "♟", "♟", "♟", "♟", "♟", "♟"],
-            [".", ".", ".", ".", ".", ".", ".", "."],
-            [".", ".", ".", ".", ".", ".", ".", "."],
-            [".", ".", ".", ".", ".", ".", ".", "."],
-            [".", ".", ".", ".", ".", ".", ".", "."],
-            ["♙", "♙", "♙", "♙", "♙", "♙", "♙", "♙"],
-            ["♖", "♘", "♗", "♕", "♔", "♗", "♘", "♖"]
-        ]
-        self.turn = "player" # 'player' (Trắng) hoặc 'monika' (Đen)
-        self.message = "Trận đấu cờ vua bắt đầu! Cậu đi quân Trắng trước."
-
-    def render_board_ascii(self):
-        cols = ["A", "B", "C", "D", "E", "F", "G", "H"]
-        res = "    " + "   ".join(cols) + "\n"
-        res += "  +---+---+---+---+---+---+---+---+\n"
-        for idx, row in enumerate(self.board):
-            row_num = 8 - idx
-            row_str = f"{row_num} | " + " | ".join(row) + " |"
-            res += row_str + f"\n  +---+---+---+---+---+---+---+---+\n"
-        return res
-
-# ==========================================
-# 9. DISCORD BOT COMMANDS & EVENTS
+# 8. DISCORD BOT COMMANDS & EVENTS
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -386,12 +355,12 @@ async def custom_help(ctx):
     )
     embed.add_field(
         name="🔍 Tìm kiếm & Web",
-        value="`!Msearch [từ khóa]`: Monika tra cứu internet, hiển thị ảnh lên màn hình máy tính (8 trang).",
+        value="`!Msearch [từ khóa]`: Monika tra cứu internet, hiển thị ảnh trên màn hình máy tính (8 trang).",
         inline=False
     )
     embed.add_field(
-        name="♟️ Mini-game Cờ Vua",
-        value="`!Mchess`: Bắt đầu đấu Cờ Vua với Monika.\n`!Mchess [ô_đầu] [ô_đến]` (Ví dụ: `!Mchess e2 e4`) để di chuyển quân.",
+        name="📊 Phân Tích Chuyên Sâu (`!Manalytics`)",
+        value="Gửi kèm **Ảnh** hoặc **Video (<30s)** cùng lệnh `!Mmanalytics [yêu cầu]` để Monika phân tích cực kỳ chi tiết qua **15 trang**, có nút nhập câu hỏi thêm trực tiếp!",
         inline=False
     )
     embed.add_field(
@@ -405,89 +374,82 @@ async def custom_help(ctx):
     )
     await ctx.send(embed=embed)
 
-@monika_bot.command(name="chess")
-async def chess_command(ctx, *args):
-    channel_id = ctx.channel.id
-    
-    if len(args) == 0:
-        game = ChessGame()
-        active_chess_games[channel_id] = game
-        
-        desc = (
-            f"*mỉm cười dịu dàng* Cùng đấu cờ vua với tôi nhé, cậu đi quân Trắng (♙/♖/♘/♗/♕/♔)!\n\n"
-            f"**Cách Chơi:**\n"
-            f"• Cậu là Trắng, đi trước.\n"
-            f"• Tôi là Đen (♟/♜/♞/♝/♛/♚).\n"
-            f"• Cú pháp di chuyển: `!Mchess [từ_ô] [đến_ô]`\n"
-            f"• Ví dụ: `!Mchess e2 e4` hoặc `!Mchess g1 f3`\n\n"
-            f"**Bàn Cờ Hiện Tại:**\n"
-            f"```text\n{game.render_board_ascii()}```\n"
-            f"*{game.message}*"
-        )
-        embed = discord.Embed(title="♟️ Trận Đấu Cờ Vua Mới Bắt Đầu", description=desc, color=discord.Color.from_rgb(120, 198, 122))
-        await ctx.send(embed=embed)
+@monika_bot.command(name="manalytics", aliases=["manalyse", "phântích"])
+async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi tiết toàn bộ nội dung trong tài liệu/hình ảnh/video này một cách sâu sắc nhất."):
+    if not ctx.message.attachments:
+        await ctx.send("*nghiêng đầu* Cậu hãy gửi kèm một bức ảnh hoặc file video dưới 30 giây để tôi tiến hành phân tích chuyên sâu nhé!")
         return
 
-    if channel_id not in active_chess_games:
-        await ctx.send("*nghiêng đầu* Chưa có bàn cờ nào đang diễn ra cả. Hãy gõ `!Mchess` để tạo bàn cờ mới nhé!")
-        return
+    attachment = ctx.message.attachments[0]
+    status_msg = await ctx.send("📊 *Monika đang tiến hành bóc tách, nghiên cứu và phân tích chuyên sâu dữ liệu của cậu (15 trang)...*")
+    
+    media_pil = None
+    media_data_for_ai = None
+    temp_video_path = f"temp_ana_{ctx.author.id}.mp4"
 
-    game = active_chess_games[channel_id]
-    
-    if len(args) < 2:
-        await ctx.send("*lắc đầu* Cậu phải nhập đúng cú pháp di chuyển, ví dụ: `!Mchess e2 e4` nhé!")
-        return
-
-    from_pos, to_pos = args[0].lower(), args[1].lower()
-    
-    col_map = {'a': 0, 'b': 1, 'c': 2, 'd': 3, 'e': 4, 'f': 5, 'g': 6, 'h': 7}
-    
     try:
-        f_col, f_row = col_map[from_pos[0]], 8 - int(from_pos[1])
-        t_col, t_row = col_map[to_pos[0]], 8 - int(to_pos[1])
-    except Exception:
-        await ctx.send("*bối rối* Tọa độ ô cờ không hợp lệ! (Ví dụ hợp lệ từ a1 đến h8)")
-        return
+        file_bytes = await attachment.read()
+        filename_lower = attachment.filename.lower()
+        
+        if any(filename_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp']):
+            media_pil = Image.open(io.BytesIO(file_bytes)).convert("RGBA")
+            media_data_for_ai = media_pil
+        elif any(filename_lower.endswith(ext) for ext in ['.mp4', '.mov', '.avi', '.mkv']):
+            with open(temp_video_path, "wb") as f:
+                f.write(file_bytes)
+            
+            cap = cv2.VideoCapture(temp_video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = total_frames / fps if fps > 0 else 0
+            
+            if duration > 32:
+                await status_msg.edit(content="*lắc đầu* Video vượt quá giới hạn 30 giây rồi cậu ơi!")
+                cap.release()
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+                return
+                
+            # Lấy frame ở giữa video làm đại diện hiển thị lên máy tính Monika
+            cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames // 2)
+            ret, frame = cap.read()
+            if ret:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                media_pil = Image.fromarray(frame_rgb).convert("RGBA")
+            cap.release()
+            
+            # Gửi dạng bytes file hoặc prompt cho Gemini đọc video/tài liệu
+            media_data_for_ai = types.Part.from_bytes(data=file_bytes, mime_type=attachment.content_type or "video/mp4")
+        else:
+            media_data_for_ai = types.Part.from_bytes(data=file_bytes, mime_type=attachment.content_type or "application/octet-stream")
 
-    # Kiểm tra đơn giản nước đi hợp lệ của người chơi
-    piece = game.board[f_row][f_col]
-    if piece in [".", "♜", "♞", "♝", "♛", "♚", "♟"]:
-        await ctx.send("*lắc đầu* Ô xuất phát không có quân cờ của cậu (Trắng)!")
-        return
+    except Exception as e:
+        print(f"Lỗi xử lý file phân tích: {e}")
 
-    # Thực hiện nước đi người chơi
-    game.board[t_row][t_col] = piece
-    game.board[f_row][f_col] = "."
-    game.message = f"Cậu vừa đi từ {from_pos} đến {to_pos}."
+    full_prompt = f"Hãy đóng vai chuyên gia, phân tích cực kỳ sâu sắc, chi tiết và toàn diện về nội dung sau: '{user_prompt}'. Viết thật tỉ mỉ để chia thành đúng 15 trang thoại."
+    
+    if media_data_for_ai:
+        reply = await ask_monika([full_prompt, media_data_for_ai])
+    else:
+        reply = await ask_monika(full_prompt)
 
-    # Monika (Đen) phản hồi tự động đơn giản di chuyển ngẫu nhiên một quân Đen hợp lệ
-    import random
-    black_pieces = []
-    for r in range(8):
-        for c in range(8):
-            if game.board[r][c] in ["♟", "♜", "♞", "♝", "♛", "♚"]:
-                black_pieces.append((r, c))
+    pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=15)
 
-    if black_pieces:
-        br, bc = random.choice(black_pieces)
-        target_moves = [(br+1, bc), (br+1, bc+1), (br+1, bc-1)]
-        valid_targets = [(tr, tc) for tr, tc in target_moves if 0 <= tr < 8 and 0 <= tc < 8 and game.board[tr][tc] in [".", "♙", "♖", "♘", "♗", "♕", "♔"]]
-        if valid_targets:
-            tr, tc = random.choice(valid_targets)
-            b_piece = game.board[br][bc]
-            game.board[tr][tc] = b_piece
-            game.board[br][bc] = "."
-            cols_rev = {0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e', 5: 'f', 6: 'g', 7: 'h'}
-            game.message += f" Monika đã phản đòn bằng quân {b_piece} từ {cols_rev[bc]}{8-br} đến {cols_rev[tc]}{8-tr}!"
+    await status_msg.delete()
+    
+    if mas_data.get("render_mode", True):
+        img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=media_pil)
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        
+        view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=media_pil, media_data=media_data_for_ai)
+        view.page_counter.label = f"Trang 1/15"
+        await ctx.send(file=file, view=view)
+    else:
+        embed = discord.Embed(title="📊 Monika Deep Analytics", description=reply, color=discord.Color.from_rgb(120, 198, 122))
+        await ctx.send(embed=embed)
 
-    desc = (
-        f"**Bàn Cờ Cờ Vua**\n"
-        f"```text\n{game.render_board_ascii()}```\n"
-        f"*{game.message}*\n"
-        f"Gõ tiếp `!Mchess [từ_ô] [đến_ô]` để đi tiếp nước kế tiếp!"
-    )
-    embed = discord.Embed(title="♟️ Ván Cờ Vua Monika After Story", description=desc, color=discord.Color.from_rgb(120, 198, 122))
-    await ctx.send(embed=embed)
+    if os.path.exists(temp_video_path):
+        os.remove(temp_video_path)
 
 @monika_bot.command(name="search")
 async def search_command(ctx, *, query: str = None):
@@ -534,6 +496,7 @@ async def search_command(ctx, *, query: str = None):
         file = discord.File(fp=img_buf, filename="monika_render.png")
         
         view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil)
+        view.page_counter.label = f"Trang 1/8"
         await ctx.send(file=file, view=view)
     else:
         embed = discord.Embed(title=f"💚 Monika Search: {query}", description=reply, color=discord.Color.from_rgb(120, 198, 122))
@@ -667,6 +630,7 @@ async def on_message(message):
                 file = discord.File(fp=img_buf, filename="monika_render.png")
                 
                 view = DialoguePaginationView(pages, author_id=message.author.id)
+                view.page_counter.label = f"Trang 1/8"
                 await message.channel.send(file=file, view=view)
                 return
 
