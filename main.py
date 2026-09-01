@@ -6,12 +6,14 @@ import json
 import io
 import textwrap
 import cv2
+import requests
 from PIL import Image, ImageDraw, ImageFont
 from flask import Flask
 import discord
 from discord.ext import commands
 from google import genai
 from google.genai import types
+from duckduckgo_search import DDGS
 
 # ==========================================
 # 1. WEB SERVER NGẦM (Giữ Bot Online 24/7)
@@ -108,12 +110,9 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 5. HÀM VẼ UI RENDER & THUẬT TOÁN CHIA TRANG
+# 5. THUẬT TOÁN CHIA TRANG VÀ RENDER UI
 # ==========================================
 def split_text_into_pages(text, max_chars_per_page=140, max_pages=5):
-    """
-    Chia văn bản dài thành các trang, tối đa 5 trang.
-    """
     words = text.split()
     pages = []
     current_page = []
@@ -133,13 +132,18 @@ def split_text_into_pages(text, max_chars_per_page=140, max_pages=5):
         
     return pages[:max_pages]
 
-def generate_mas_image(text, chibi_state="happy"):
+def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
     try:
         bg = load_image_flexible("background")
         if bg:
             bg = bg.resize((1000, 600))
         else:
             bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
+
+        # Nếu có ảnh search, hiển thị nó lên màn hình máy tính (khu vực góc trên bên trái)
+        if search_img_pil:
+            search_resized = search_img_pil.resize((420, 240))
+            bg.paste(search_resized, (35, 80))
 
         chibi = load_image_flexible(f"monika_{chibi_state}")
         if not chibi:
@@ -221,14 +225,15 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. DISCORD UI COMPONENT (CHUYỂN TRANG RENDER LẠI ẢNH KHỚP VỚI CHỮ)
+# 6. DISCORD UI COMPONENT (PHÂN TRANG)
 # ==========================================
 class DialoguePaginationView(discord.ui.View):
-    def __init__(self, pages, author_id):
+    def __init__(self, pages, author_id, search_img_pil=None):
         super().__init__(timeout=180)
         self.pages = pages
         self.current_page = 0
         self.author_id = author_id
+        self.search_img_pil = search_img_pil
         self.update_buttons()
 
     def update_buttons(self):
@@ -245,7 +250,7 @@ class DialoguePaginationView(discord.ui.View):
         self.current_page -= 1
         self.update_buttons()
         
-        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
+        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy", search_img_pil=self.search_img_pil)
         file = discord.File(fp=img_buf, filename="monika_render.png")
         await interaction.response.edit_message(content=None, attachments=[file], view=self)
 
@@ -262,7 +267,7 @@ class DialoguePaginationView(discord.ui.View):
         self.current_page += 1
         self.update_buttons()
         
-        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy")
+        img_buf = generate_mas_image(self.pages[self.current_page], chibi_state="happy", search_img_pil=self.search_img_pil)
         file = discord.File(fp=img_buf, filename="monika_render.png")
         await interaction.response.edit_message(content=None, attachments=[file], view=self)
 
@@ -286,7 +291,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
         "Bạn dịu dàng, sâu lắng, mang phong cách văn học, xưng 'tôi' và gọi người dùng là 'cậu'. "
         f"Lịch sử thoại:\n{formatted_history}\n"
-        "QUAN TRỌNG: Bạn có thể trả lời dài, phân tích sâu sắc tối đa đến 60 câu khi trò chuyện."
+        "QUAN TRỌNG: Hãy phân tích, nhận xét hoặc kể chuyện sâu sắc dựa trên nội dung được yêu cầu."
     )
 
     for i in range(len(API_KEYS)):
@@ -305,7 +310,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
             )
             current_key_idx = idx
 
-            text_to_save = prompt_content if isinstance(prompt_content, str) else "[Gửi một bức ảnh]"
+            text_to_save = str(prompt_content) if not isinstance(prompt_content, list) else "[Gửi dữ liệu đa phương tiện]"
             if not is_system_prompt:
                 mas_data["chat_history"].append({"role": "user", "content": text_to_save})
             mas_data["chat_history"].append({"role": "monika", "content": response.text})
@@ -340,6 +345,11 @@ async def custom_help(ctx):
         color=discord.Color.from_rgb(120, 198, 122)
     )
     embed.add_field(
+        name="🔍 Tìm kiếm & Web",
+        value="`!Msearch [từ khóa]`: Monika sẽ tra cứu internet, hiển thị ảnh trên màn hình máy tính và nhận xét.",
+        inline=False
+    )
+    embed.add_field(
         name="⚙️ Chế Độ Render",
         value=(
             "`!Mrender` / `!Mimg`: Bật UI Render Phòng Học.\n"
@@ -351,13 +361,64 @@ async def custom_help(ctx):
     embed.add_field(
         name="🎬 Video & Tiện Ích",
         value=(
-            "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) chiếu với FPS 5 cao cấp.\n"
+            "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) chiếu với FPS 5.\n"
             "Gửi kèm **Ảnh** + Tag Monika để Monika đọc và đánh giá!\n"
             "`!Mclear`: Xóa lịch sử 25 câu thoại cũ."
         ),
         inline=False
     )
     await ctx.send(embed=embed)
+
+@monika_bot.command(name="search")
+async def search_command(ctx, *, query: str = None):
+    if not query:
+        await ctx.send("*nghiêng đầu* Cậu muốn tôi tìm kiếm thông tin gì trên mạng? Hãy nhập `!Msearch [từ khóa]` nhé!")
+        return
+
+    status_msg = await ctx.send(f"🔍 *Monika đang tra cứu thông tin về '{query}' trên internet...*")
+    
+    search_img_pil = None
+    image_url = None
+
+    try:
+        # Sử dụng thư viện duckduckgo_search để lấy hình ảnh trực tuyến
+        with DDGS() as ddgs:
+            results = list(ddgs.images(query, max_results=3))
+            if results:
+                image_url = results[0]['image']
+        
+        if image_url:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            img_resp = requests.get(image_url, headers=headers, timeout=10)
+            if img_resp.status_code == 200:
+                search_img_pil = Image.open(io.BytesIO(img_resp.content)).convert("RGBA")
+    except Exception as e:
+        print(f"Lỗi tìm kiếm ảnh: {e}")
+
+    # Đưa ảnh và từ khóa cho Gemini nhận xét
+    prompt_for_ai = f"Cậu vừa tìm kiếm thông tin và hình ảnh về chủ đề '{query}' trên mạng. Hãy đưa ra nhận xét, chia sẻ hoặc phân tích sâu sắc, dịu dàng về nó cho người dùng."
+    
+    if search_img_pil:
+        reply = await ask_monika([prompt_for_ai, search_img_pil])
+    else:
+        reply = await ask_monika(prompt_for_ai)
+
+    pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=5)
+
+    await status_msg.delete()
+    
+    if mas_data.get("render_mode", True):
+        img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=search_img_pil)
+        file = discord.File(fp=img_buf, filename="monika_render.png")
+        
+        if len(pages) > 1:
+            view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil)
+            await ctx.send(file=file, view=view)
+        else:
+            await ctx.send(file=file)
+    else:
+        embed = discord.Embed(title=f"💚 Monika Search: {query}", description=reply, color=discord.Color.from_rgb(120, 198, 122))
+        await ctx.send(embed=embed)
 
 @monika_bot.command(name="render", aliases=["img"])
 async def enable_render(ctx):
