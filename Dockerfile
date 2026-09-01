@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Cài đặt các thư viện hệ thống bắt buộc cho Voice (Opus, FFmpeg) và OpenCV
+# Cài đặt ffmpeg và các thư viện phụ thuộc hệ thống
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libopus-dev \
