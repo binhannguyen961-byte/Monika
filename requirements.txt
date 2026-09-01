@@ -3,3 +3,4 @@ pillow
 discord.py
 google-genai
 flask
+duckduckgo_search
