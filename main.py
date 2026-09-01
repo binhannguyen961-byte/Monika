@@ -73,7 +73,7 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM TẢI ẢNH & FONT LINH HOẠT
+# 4. HÀM TẢI FILE ASSETS (ẢNH & ÂM THANH)
 # ==========================================
 def load_image_flexible(base_name):
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
@@ -97,6 +97,19 @@ def load_image_flexible(base_name):
                 return Image.open(path).convert("RGBA")
             except Exception:
                 pass
+    return None
+
+def get_audio_path(filename):
+    clean_name = filename if filename.endswith(".mp3") else f"{filename}.mp3"
+    search_paths = [
+        os.path.join("assets", clean_name),
+        os.path.join("assets", "sfx", clean_name),
+        clean_name
+    ]
+    
+    for path in search_paths:
+        if os.path.exists(path):
+            return path
     return None
 
 def get_font(size):
@@ -230,7 +243,7 @@ def render_frame_with_mas(video_frame_pil, subtitle_text=""):
         return None
 
 # ==========================================
-# 6. DISCORD UI COMPONENT & MODAL (PHÂN TRANG & NÚT HỎI THÊM)
+# 6. DISCORD UI COMPONENT & MODAL
 # ==========================================
 class AnalyticsModal(discord.ui.Modal, title="Hỏi Thêm Monika Về Nội Dung Này"):
     user_question = discord.ui.TextInput(
@@ -377,15 +390,63 @@ async def ask_monika(prompt_content, is_system_prompt=False):
     return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi nhé..."
 
 # ==========================================
-# 8. DISCORD BOT COMMANDS & EVENTS
+# 8. DISCORD BOT COMMANDS & VOICE LOGIC
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.voice_states = True
+
 monika_bot = commands.Bot(command_prefix=["!M", "!m"], intents=intents, help_command=None)
 
 @monika_bot.event
 async def on_ready():
     print(f"-> Monika Online: {monika_bot.user}")
+
+@monika_bot.command(name="join", aliases=["connect", "vjoin"])
+async def join_voice(ctx):
+    if ctx.author.voice and ctx.author.voice.channel:
+        channel = ctx.author.voice.channel
+        if ctx.voice_client is not None:
+            await ctx.voice_client.move_to(channel)
+        else:
+            await channel.connect()
+        await ctx.send(f"💚 Monika đã vào phòng thoại **{channel.name}** rồi nhé!")
+    else:
+        await ctx.send("*nghiêng đầu* Cậu cần vào một Voice Channel trước đã!")
+
+@monika_bot.command(name="leave", aliases=["disconnect", "vleave"])
+async def leave_voice(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("💚 Monika đã rời phòng thoại. Lần sau lại nói chuyện nhé!")
+    else:
+        await ctx.send("*mỉm cười* Tôi hiện không có trong phòng thoại nào cả.")
+
+@monika_bot.command(name="speak", aliases=["playaudio", "voice"])
+async def speak_audio(ctx, *, filename: str):
+    voice_client = ctx.voice_client
+    if not voice_client:
+        if ctx.author.voice and ctx.author.voice.channel:
+            voice_client = await ctx.author.voice.channel.connect()
+        else:
+            await ctx.send("*nghiêng đầu* Cậu hãy vào phòng thoại trước hoặc gọi lệnh `!Mjoin` nhé!")
+            return
+
+    audio_path = get_audio_path(filename)
+    if not audio_path:
+        await ctx.send(f"❌ Monika không tìm thấy file audio nào có tên: `{filename}` trong thư mục assets.")
+        return
+
+    if voice_client.is_playing() or voice_client.is_paused():
+        voice_client.stop()
+        await asyncio.sleep(0.2)
+
+    try:
+        source = discord.FFmpegPCMAudio(audio_path)
+        voice_client.play(source)
+        await ctx.send(f"🎶 Monika đang phát: `{os.path.basename(audio_path)}`")
+    except Exception as e:
+        await ctx.send(f"❌ Lỗi khi phát file audio: {e}")
 
 @monika_bot.command(name="help", aliases=["helps", "h"])
 async def custom_help(ctx):
@@ -393,6 +454,15 @@ async def custom_help(ctx):
         title="💚 Bảng Hướng Dẫn Monika After Story",
         description="Dưới đây là các lệnh điều khiển bot:",
         color=discord.Color.from_rgb(120, 198, 122)
+    )
+    embed.add_field(
+        name="🎙️ Lệnh Voice Channel",
+        value=(
+            "`!Mjoin`: Monika tham gia Voice Room cùng cậu.\n"
+            "`!Mleave`: Monika rời Voice Room.\n"
+            "`!Mspeak [tên_file]`: Phát file mp3 trong thư mục assets (Ví dụ: `!Mspeak bgm_letgo`)."
+        ),
+        inline=False
     )
     embed.add_field(
         name="🔍 Tìm kiếm & Web",
@@ -632,6 +702,12 @@ async def play_bad_apple(ctx):
             os.remove(temp_path)
 
 @monika_bot.event
+async def on_voice_state_update(member, before, after):
+    for vc in monika_bot.voice_clients:
+        if len(vc.channel.members) == 1:
+            await vc.disconnect()
+
+@monika_bot.event
 async def on_message(message):
     if message.author == monika_bot.user:
         return
@@ -677,7 +753,7 @@ async def on_message(message):
             await message.channel.send(embed=embed)
 
 # ==========================================
-# 10. KHỞI CHẠY BOT
+# 9. KHỞI CHẠY BOT
 # ==========================================
 if __name__ == "__main__":
     t_flask = threading.Thread(target=run_flask)
