@@ -1,13 +1,14 @@
-FROM python:3.10-slim
+# Đổi sang bản bookworm-slim ổn định
+FROM python:3.10-slim-bookworm
 
-# Cài đặt ffmpeg và các thư viện phụ thuộc hệ thống
+# Cập nhật danh sách gói chuẩn cho Bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libopus-dev \
     libopus0 \
     build-essential \
     libffi-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
