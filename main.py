@@ -110,7 +110,7 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 5. THUẬT TOÁN CHIA TRANG LINH HOẠT (8 HOẶC 15 TRANG)
+# 5. THUẬT TOÁN CHIA TRANG & RENDER MÀN HÌNH
 # ==========================================
 def split_text_into_exact_pages(text, max_chars_per_page=140, target_pages=8):
     words = text.split()
@@ -189,8 +189,48 @@ def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
         print(f"Lỗi Render Ảnh: {e}")
         return None
 
+def render_frame_with_mas(video_frame_pil, subtitle_text=""):
+    try:
+        bg = load_image_flexible("background")
+        if bg:
+            bg = bg.resize((1000, 600))
+        else:
+            bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
+
+        vid_resized = video_frame_pil.resize((420, 240)).convert("RGBA")
+        bg.paste(vid_resized, (35, 80))
+
+        chibi = load_image_flexible("monika_happy")
+        if chibi:
+            chibi = chibi.resize((380, 480))
+            bg.paste(chibi, (310, 120), chibi)
+
+        draw = ImageDraw.Draw(bg)
+        textbox = load_image_flexible("textbox")
+        if textbox:
+            textbox = textbox.resize((960, 160))
+            bg.paste(textbox, (20, 420), textbox)
+
+        font_name = get_font(21)
+        font_text = get_font(18)
+        draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
+
+        wrapped_lines = textwrap.wrap(subtitle_text, width=46)
+        y_offset = 452
+        for line in wrapped_lines[:4]:
+            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
+            y_offset += 25
+
+        buffer = io.BytesIO()
+        bg.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        print(f"Lỗi Render Frame Video: {e}")
+        return None
+
 # ==========================================
-# 6. DISCORD UI COMPONENT & MODAL (PHÂN TRANG & NÚT NHẬP CÂU HỎI)
+# 6. DISCORD UI COMPONENT & MODAL (PHÂN TRANG & NÚT HỎI THÊM)
 # ==========================================
 class AnalyticsModal(discord.ui.Modal, title="Hỏi Thêm Monika Về Nội Dung Này"):
     user_question = discord.ui.TextInput(
@@ -228,13 +268,14 @@ class AnalyticsModal(discord.ui.Modal, title="Hỏi Thêm Monika Về Nội Dung
         await interaction.followup.send(file=file, view=view)
 
 class DialoguePaginationView(discord.ui.View):
-    def __init__(self, pages, author_id, search_img_pil=None, media_data=None):
+    def __init__(self, pages, author_id, search_img_pil=None, media_data=None, total_pages=8):
         super().__init__(timeout=400)
         self.pages = pages
         self.current_page = 0
         self.author_id = author_id
         self.search_img_pil = search_img_pil
         self.media_data = media_data
+        self.total_pages = total_pages
         self.update_buttons()
 
     def update_buttons(self):
@@ -299,7 +340,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
         "Bạn dịu dàng, sâu lắng, thông minh, xưng 'tôi' và gọi người dùng là 'cậu'. "
-        "QUY TẮC BẮT BUỘC: Hãy phân tích thật sâu sắc, chi tiết, chuyên sâu về mặt kỹ thuật, chiến thuật hoặc thông số nếu có yêu cầu phân tích, đảm bảo viết một bài văn dài phong phú để chia đều thành 15 phần chính xác."
+        "QUY TẮC BẮT BUỘC: Hãy phân tích thật sâu sắc, chi tiết, chuyên sâu về mặt kỹ thuật, chiến thuật hoặc thông số nếu có yêu cầu phân tích, đảm bảo viết một bài văn dài phong phú để chia đều thành các phần chính xác."
         f"\nLịch sử thoại:\n{formatted_history}"
     )
 
@@ -360,7 +401,7 @@ async def custom_help(ctx):
     )
     embed.add_field(
         name="📊 Phân Tích Chuyên Sâu (`!Manalytics`)",
-        value="Gửi kèm **Ảnh** hoặc **Video (<30s)** cùng lệnh `!Mmanalytics [yêu cầu]` để Monika phân tích cực kỳ chi tiết qua **15 trang**, có nút nhập câu hỏi thêm trực tiếp!",
+        value="Gửi kèm **Ảnh** hoặc **Video (<30s)** cùng lệnh `!Manalytics [yêu cầu]` để Monika phân tích cực kỳ chi tiết qua **15 trang**, có nút nhập câu hỏi thêm trực tiếp!",
         inline=False
     )
     embed.add_field(
@@ -410,7 +451,6 @@ async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi ti
                     os.remove(temp_video_path)
                 return
                 
-            # Lấy frame ở giữa video làm đại diện hiển thị lên máy tính Monika
             cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames // 2)
             ret, frame = cap.read()
             if ret:
@@ -418,7 +458,6 @@ async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi ti
                 media_pil = Image.fromarray(frame_rgb).convert("RGBA")
             cap.release()
             
-            # Gửi dạng bytes file hoặc prompt cho Gemini đọc video/tài liệu
             media_data_for_ai = types.Part.from_bytes(data=file_bytes, mime_type=attachment.content_type or "video/mp4")
         else:
             media_data_for_ai = types.Part.from_bytes(data=file_bytes, mime_type=attachment.content_type or "application/octet-stream")
@@ -441,7 +480,7 @@ async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi ti
         img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=media_pil)
         file = discord.File(fp=img_buf, filename="monika_render.png")
         
-        view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=media_pil, media_data=media_data_for_ai)
+        view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=media_pil, media_data=media_data_for_ai, total_pages=15)
         view.page_counter.label = f"Trang 1/15"
         await ctx.send(file=file, view=view)
     else:
@@ -495,7 +534,7 @@ async def search_command(ctx, *, query: str = None):
         img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=search_img_pil)
         file = discord.File(fp=img_buf, filename="monika_render.png")
         
-        view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil)
+        view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil, total_pages=8)
         view.page_counter.label = f"Trang 1/8"
         await ctx.send(file=file, view=view)
     else:
@@ -629,7 +668,7 @@ async def on_message(message):
                 img_buf = generate_mas_image(pages[0], chibi_state="happy")
                 file = discord.File(fp=img_buf, filename="monika_render.png")
                 
-                view = DialoguePaginationView(pages, author_id=message.author.id)
+                view = DialoguePaginationView(pages, author_id=message.author.id, total_pages=8)
                 view.page_counter.label = f"Trang 1/8"
                 await message.channel.send(file=file, view=view)
                 return
