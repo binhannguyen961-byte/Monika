@@ -15,7 +15,9 @@ from google import genai
 from google.genai import types
 from duckduckgo_search import DDGS
 
-# Tự động tìm và load Opus library cho Docker/Linux
+# ==========================================
+# 0. CHUẨN BỊ THƯ VIỆN OPUS CHO DOCKER VOICE
+# ==========================================
 if not discord.opus.is_loaded():
     for opus_lib in ['libopus.so.0', 'libopus.so', '/usr/lib/x86_64-linux-gnu/libopus.so.0']:
         try:
@@ -452,7 +454,8 @@ async def speak_audio(ctx, *, filename: str):
         await asyncio.sleep(0.2)
 
     try:
-        source = discord.FFmpegPCMAudio(audio_path)
+        # Chỉ định rõ executable ffmpeg cho Docker
+        source = discord.FFmpegPCMAudio(audio_path, executable="ffmpeg")
         voice_client.play(source)
         await ctx.send(f"🎶 Monika đang phát: `{os.path.basename(audio_path)}`")
     except Exception as e:
@@ -470,7 +473,7 @@ async def custom_help(ctx):
         value=(
             "`!Mjoin`: Monika tham gia Voice Room cùng cậu.\n"
             "`!Mleave`: Monika rời Voice Room.\n"
-            "`!Mspeak [tên_file]`: Phát file mp3 trong thư mục assets (Ví dụ: `!Mspeak bgm_letgo`)."
+            "`!Mspeak [tên_file]`: Phát file mp3 trong thư mục assets (Ví dụ: `!Mspeak goatman_howl`)."
         ),
         inline=False
     )
