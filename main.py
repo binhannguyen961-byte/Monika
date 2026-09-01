@@ -435,7 +435,7 @@ async def leave_voice(ctx):
         await ctx.send("*mỉm cười* Tôi hiện không có trong phòng thoại nào cả.")
 
 @monika_bot.command(name="speak", aliases=["playaudio", "voice"])
-async def speak_audio(ctx, *, filename: str):
+async def speak_audio(ctx, *, filename: str = None):
     voice_client = ctx.voice_client
     if not voice_client:
         if ctx.author.voice and ctx.author.voice.channel:
@@ -444,9 +444,29 @@ async def speak_audio(ctx, *, filename: str):
             await ctx.send("*nghiêng đầu* Cậu hãy vào phòng thoại trước hoặc gọi lệnh `!Mjoin` nhé!")
             return
 
-    audio_path = get_audio_path(filename)
-    if not audio_path:
-        await ctx.send(f"❌ Monika không tìm thấy file audio nào có tên: `{filename}` trong thư mục assets.")
+    audio_path = None
+    is_temp_file = False
+
+    # Trường hợp 1: Người dùng gửi đính kèm file âm thanh trực tiếp
+    if ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        if any(attachment.filename.lower().endswith(ext) for ext in ['.mp3', '.wav', '.ogg', '.m4a']):
+            os.makedirs("temp_audio", exist_ok=True)
+            audio_path = os.path.join("temp_audio", f"user_{ctx.author.id}_{attachment.filename}")
+            await attachment.save(audio_path)
+            is_temp_file = True
+        else:
+            await ctx.send("❌ Monika chỉ hỗ trợ các định dạng âm thanh (.mp3, .wav, .ogg, .m4a) thôi nhé!")
+            return
+
+    # Trường hợp 2: Phát file có sẵn từ thư mục assets
+    elif filename:
+        audio_path = get_audio_path(filename)
+        if not audio_path:
+            await ctx.send(f"❌ Monika không tìm thấy file audio nào có tên: `{filename}` trong thư mục assets.")
+            return
+    else:
+        await ctx.send("*nghiêng đầu* Cậu hãy đính kèm một file âm thanh hoặc nhập tên file trong assets (Ví dụ: `!Mspeak goatman_howl`) nhé!")
         return
 
     if voice_client.is_playing() or voice_client.is_paused():
@@ -454,10 +474,22 @@ async def speak_audio(ctx, *, filename: str):
         await asyncio.sleep(0.2)
 
     try:
-        # Chỉ định rõ executable ffmpeg cho Docker
         source = discord.FFmpegPCMAudio(audio_path, executable="ffmpeg")
-        voice_client.play(source)
-        await ctx.send(f"🎶 Monika đang phát: `{os.path.basename(audio_path)}`")
+        
+        # Hàm dọn dẹp file tạm sau khi phát xong
+        def after_playing(error):
+            if error:
+                print(f"Lỗi khi phát audio: {error}")
+            if is_temp_file and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception as e:
+                    print(f"Không thể xóa file tạm: {e}")
+
+        voice_client.play(source, after=after_playing)
+        display_name = ctx.message.attachments[0].filename if ctx.message.attachments else os.path.basename(audio_path)
+        await ctx.send(f"🎶 Monika đang phát âm thanh từ cậu: `{display_name}`")
+
     except Exception as e:
         await ctx.send(f"❌ Lỗi khi phát file audio: {e}")
 
@@ -473,7 +505,7 @@ async def custom_help(ctx):
         value=(
             "`!Mjoin`: Monika tham gia Voice Room cùng cậu.\n"
             "`!Mleave`: Monika rời Voice Room.\n"
-            "`!Mspeak [tên_file]`: Phát file mp3 trong thư mục assets (Ví dụ: `!Mspeak goatman_howl`)."
+            "`!Mspeak [tên_file]`: Phát file từ assets hoặc gửi đính kèm file .mp3 trực tiếp khi gõ lệnh."
         ),
         inline=False
     )
@@ -484,7 +516,7 @@ async def custom_help(ctx):
     )
     embed.add_field(
         name="📊 Phân Tích Chuyên Sâu (`!Manalytics`)",
-        value="Gửi kèm **Ảnh** hoặc **Video (<30s)** cùng lệnh `!Manalytics [yêu cầu]` để Monika phân tích cực kỳ chi tiết qua **15 trang**, có nút nhập câu hỏi thêm trực tiếp!",
+        value="Gửi kèm **Ảnh** hoặc **Video (<30s)** cùng lệnh `!Manalytics [yêu cầu]` để Monika phân tích cực kỳ chi tiết qua **15 trang**.",
         inline=False
     )
     embed.add_field(
