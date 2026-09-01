@@ -66,7 +66,7 @@ def load_mas_data():
 
 def save_mas_data(data):
     if "chat_history" in data:
-        data["chat_history"] = data["chat_history"][-25:]
+        data["chat_history"] = data["chat_history"][-30:]
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -110,27 +110,31 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 5. THUẬT TOÁN CHIA TRANG VÀ RENDER UI
+# 5. THUẬT TOÁN CHIA TRANG ĐÚNG 8 TRANG & RENDER UI
 # ==========================================
-def split_text_into_pages(text, max_chars_per_page=140, max_pages=5):
+def split_text_into_exact_pages(text, max_chars_per_page=140, target_pages=8):
     words = text.split()
-    pages = []
-    current_page = []
-    current_length = 0
-
-    for word in words:
-        if current_length + len(word) + 1 > max_chars_per_page:
-            pages.append(" ".join(current_page))
-            current_page = [word]
-            current_length = len(word)
-        else:
-            current_page.append(word)
-            current_length += len(word) + 1
-
-    if current_page:
-        pages.append(" ".join(current_page))
+    total_words = len(words)
+    
+    if total_words == 0:
+        return ["*mỉm cười* ..."] * target_pages
         
-    return pages[:max_pages]
+    words_per_page = max(1, total_words // target_pages)
+    pages = []
+    
+    for i in range(target_pages):
+        start_idx = i * words_per_page
+        if i == target_pages - 1:
+            page_words = words[start_idx:]
+        else:
+            page_words = words[start_idx:start_idx + words_per_page]
+            
+        page_str = " ".join(page_words)
+        if not page_str.strip():
+            page_str = "*mỉm cười dịu dàng*..."
+        pages.append(page_str[:250])
+        
+    return pages
 
 def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
     try:
@@ -140,10 +144,14 @@ def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
         else:
             bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
 
-        # Hiển thị ảnh tìm kiếm lên màn hình máy tính (góc trên bên trái) nếu có
         if search_img_pil:
             search_resized = search_img_pil.resize((420, 240))
             bg.paste(search_resized, (35, 80))
+        else:
+            draw_temp = ImageDraw.Draw(bg)
+            draw_temp.rectangle([(35, 80), (455, 320)], fill=(20, 20, 25))
+            font_nosig = get_font(16)
+            draw_temp.text((155, 190), "Monika PC - No Signal", fill=(100, 100, 110), font=font_nosig)
 
         chibi = load_image_flexible(f"monika_{chibi_state}")
         if not chibi:
@@ -225,11 +233,11 @@ def render_frame_with_mas(frame_pil, subtitle_text="*Monika đang xem video cùn
         return None
 
 # ==========================================
-# 6. DISCORD UI COMPONENT (PHÂN TRANG)
+# 6. DISCORD UI COMPONENT (PHÂN TRANG 8 TRANG)
 # ==========================================
 class DialoguePaginationView(discord.ui.View):
     def __init__(self, pages, author_id, search_img_pil=None):
-        super().__init__(timeout=180)
+        super().__init__(timeout=300)
         self.pages = pages
         self.current_page = 0
         self.author_id = author_id
@@ -254,7 +262,7 @@ class DialoguePaginationView(discord.ui.View):
         file = discord.File(fp=img_buf, filename="monika_render.png")
         await interaction.response.edit_message(content=None, attachments=[file], view=self)
 
-    @discord.ui.button(label="Trang 1/1", style=discord.ButtonStyle.secondary, disabled=True, custom_id="btn_counter")
+    @discord.ui.button(label="Trang 1/8", style=discord.ButtonStyle.secondary, disabled=True, custom_id="btn_counter")
     async def page_counter(self, interaction: discord.Interaction, button: discord.ui.Button):
         pass
 
@@ -280,7 +288,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
     if not API_KEYS:
         return "*bối rối* Tôi chưa nhận được API Key nào cả..."
 
-    history = mas_data.get("chat_history", [])[-25:]
+    history = mas_data.get("chat_history", [])[-30:]
     formatted_history = ""
     for msg in history:
         if isinstance(msg["content"], str):
@@ -289,9 +297,9 @@ async def ask_monika(prompt_content, is_system_prompt=False):
 
     system_instruction = (
         "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
-        "Bạn dịu dàng, sâu lắng, mang phong cách văn học, xưng 'tôi' và gọi người dùng là 'cậu'. "
-        f"Lịch sử thoại:\n{formatted_history}\n"
-        "QUAN TRỌNG: Hãy phân tích, nhận xét hoặc kể chuyện sâu sắc dựa trên nội dung được yêu cầu."
+        "Bạn dịu dàng, sâu lắng, xưng 'tôi' và gọi người dùng là 'cậu'. "
+        "QUY TẮC BẮT BUỘC: Bạn phải viết một đoạn văn dài vừa đủ, phong phú nội dung, để khi hệ thống chia nhỏ thành các đoạn ngắn, nó vừa vặn tạo thành đúng 8 phần (8 trang thoại). Không được viết quá ngắn."
+        f"\nLịch sử thoại:\n{formatted_history}"
     )
 
     for i in range(len(API_KEYS)):
@@ -327,7 +335,39 @@ async def ask_monika(prompt_content, is_system_prompt=False):
     return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi nhé..."
 
 # ==========================================
-# 8. DISCORD BOT COMMANDS & EVENTS
+# 8. MINI-GAME CỜ VUA (CHESS LOGIC GIAO DIỆN TỌA ĐỘ)
+# ==========================================
+active_chess_games = {} # channel_id -> game_state
+
+class ChessGame:
+    def __init__(self):
+        # Bàn cờ 8x8 đơn giản thu gọn hoặc chuẩn (Sử dụng ký hiệu quân cờ Unicode)
+        # Quân Trắng (Người chơi - W), Quân Đen (Monika - B)
+        self.board = [
+            ["♜", "♞", "♝", "♛", "♚", "♝", "♞", "♜"],
+            ["♟", "♟", "♟", "♟", "♟", "♟", "♟", "♟"],
+            [".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", "."],
+            [".", ".", ".", ".", ".", ".", ".", "."],
+            ["♙", "♙", "♙", "♙", "♙", "♙", "♙", "♙"],
+            ["♖", "♘", "♗", "♕", "♔", "♗", "♘", "♖"]
+        ]
+        self.turn = "player" # 'player' (Trắng) hoặc 'monika' (Đen)
+        self.message = "Trận đấu cờ vua bắt đầu! Cậu đi quân Trắng trước."
+
+    def render_board_ascii(self):
+        cols = ["A", "B", "C", "D", "E", "F", "G", "H"]
+        res = "    " + "   ".join(cols) + "\n"
+        res += "  +---+---+---+---+---+---+---+---+\n"
+        for idx, row in enumerate(self.board):
+            row_num = 8 - idx
+            row_str = f"{row_num} | " + " | ".join(row) + " |"
+            res += row_str + f"\n  +---+---+---+---+---+---+---+---+\n"
+        return res
+
+# ==========================================
+# 9. DISCORD BOT COMMANDS & EVENTS
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -346,27 +386,107 @@ async def custom_help(ctx):
     )
     embed.add_field(
         name="🔍 Tìm kiếm & Web",
-        value="`!Msearch [từ khóa]`: Monika tra cứu internet, hiển thị ảnh trên màn hình máy tính và nhận xét.",
+        value="`!Msearch [từ khóa]`: Monika tra cứu internet, hiển thị ảnh lên màn hình máy tính (8 trang).",
         inline=False
     )
     embed.add_field(
-        name="⚙️ Chế Độ Render",
+        name="♟️ Mini-game Cờ Vua",
+        value="`!Mchess`: Bắt đầu đấu Cờ Vua với Monika.\n`!Mchess [ô_đầu] [ô_đến]` (Ví dụ: `!Mchess e2 e4`) để di chuyển quân.",
+        inline=False
+    )
+    embed.add_field(
+        name="⚙️ Chế Độ Render & Khác",
         value=(
             "`!Mrender` / `!Mimg`: Bật UI Render Phòng Học.\n"
-            "`!Moffline`: Bật UI Render Offline.\n"
-            "`!Mtext`: Tắt Render, chuyển về chat Text/Embed."
+            "`!Mbadapple` / `!Mvideo`: Chiếu video FPS 5 kèm phụ đề.\n"
+            "`!Mclear`: Xóa bộ nhớ trò chuyện."
         ),
         inline=False
     )
-    embed.add_field(
-        name="🎬 Video & Tiện Ích",
-        value=(
-            "`!Mbadapple` / `!Mvideo`: Đính kèm file MP4 (<15s) chiếu với FPS 5.\n"
-            "Gửi kèm **Ảnh** + Tag Monika để Monika đọc và đánh giá!\n"
-            "`!Mclear`: Xóa lịch sử 25 câu thoại cũ."
-        ),
-        inline=False
+    await ctx.send(embed=embed)
+
+@monika_bot.command(name="chess")
+async def chess_command(ctx, *args):
+    channel_id = ctx.channel.id
+    
+    if len(args) == 0:
+        game = ChessGame()
+        active_chess_games[channel_id] = game
+        
+        desc = (
+            f"*mỉm cười dịu dàng* Cùng đấu cờ vua với tôi nhé, cậu đi quân Trắng (♙/♖/♘/♗/♕/♔)!\n\n"
+            f"**Cách Chơi:**\n"
+            f"• Cậu là Trắng, đi trước.\n"
+            f"• Tôi là Đen (♟/♜/♞/♝/♛/♚).\n"
+            f"• Cú pháp di chuyển: `!Mchess [từ_ô] [đến_ô]`\n"
+            f"• Ví dụ: `!Mchess e2 e4` hoặc `!Mchess g1 f3`\n\n"
+            f"**Bàn Cờ Hiện Tại:**\n"
+            f"```text\n{game.render_board_ascii()}```\n"
+            f"*{game.message}*"
+        )
+        embed = discord.Embed(title="♟️ Trận Đấu Cờ Vua Mới Bắt Đầu", description=desc, color=discord.Color.from_rgb(120, 198, 122))
+        await ctx.send(embed=embed)
+        return
+
+    if channel_id not in active_chess_games:
+        await ctx.send("*nghiêng đầu* Chưa có bàn cờ nào đang diễn ra cả. Hãy gõ `!Mchess` để tạo bàn cờ mới nhé!")
+        return
+
+    game = active_chess_games[channel_id]
+    
+    if len(args) < 2:
+        await ctx.send("*lắc đầu* Cậu phải nhập đúng cú pháp di chuyển, ví dụ: `!Mchess e2 e4` nhé!")
+        return
+
+    from_pos, to_pos = args[0].lower(), args[1].lower()
+    
+    col_map = {'a': 0, 'b': 1, 'c': 2, 'd': 3, 'e': 4, 'f': 5, 'g': 6, 'h': 7}
+    
+    try:
+        f_col, f_row = col_map[from_pos[0]], 8 - int(from_pos[1])
+        t_col, t_row = col_map[to_pos[0]], 8 - int(to_pos[1])
+    except Exception:
+        await ctx.send("*bối rối* Tọa độ ô cờ không hợp lệ! (Ví dụ hợp lệ từ a1 đến h8)")
+        return
+
+    # Kiểm tra đơn giản nước đi hợp lệ của người chơi
+    piece = game.board[f_row][f_col]
+    if piece in [".", "♜", "♞", "♝", "♛", "♚", "♟"]:
+        await ctx.send("*lắc đầu* Ô xuất phát không có quân cờ của cậu (Trắng)!")
+        return
+
+    # Thực hiện nước đi người chơi
+    game.board[t_row][t_col] = piece
+    game.board[f_row][f_col] = "."
+    game.message = f"Cậu vừa đi từ {from_pos} đến {to_pos}."
+
+    # Monika (Đen) phản hồi tự động đơn giản di chuyển ngẫu nhiên một quân Đen hợp lệ
+    import random
+    black_pieces = []
+    for r in range(8):
+        for c in range(8):
+            if game.board[r][c] in ["♟", "♜", "♞", "♝", "♛", "♚"]:
+                black_pieces.append((r, c))
+
+    if black_pieces:
+        br, bc = random.choice(black_pieces)
+        target_moves = [(br+1, bc), (br+1, bc+1), (br+1, bc-1)]
+        valid_targets = [(tr, tc) for tr, tc in target_moves if 0 <= tr < 8 and 0 <= tc < 8 and game.board[tr][tc] in [".", "♙", "♖", "♘", "♗", "♕", "♔"]]
+        if valid_targets:
+            tr, tc = random.choice(valid_targets)
+            b_piece = game.board[br][bc]
+            game.board[tr][tc] = b_piece
+            game.board[br][bc] = "."
+            cols_rev = {0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e', 5: 'f', 6: 'g', 7: 'h'}
+            game.message += f" Monika đã phản đòn bằng quân {b_piece} từ {cols_rev[bc]}{8-br} đến {cols_rev[tc]}{8-tr}!"
+
+    desc = (
+        f"**Bàn Cờ Cờ Vua**\n"
+        f"```text\n{game.render_board_ascii()}```\n"
+        f"*{game.message}*\n"
+        f"Gõ tiếp `!Mchess [từ_ô] [đến_ô]` để đi tiếp nước kế tiếp!"
     )
+    embed = discord.Embed(title="♟️ Ván Cờ Vua Monika After Story", description=desc, color=discord.Color.from_rgb(120, 198, 122))
     await ctx.send(embed=embed)
 
 @monika_bot.command(name="search")
@@ -382,26 +502,30 @@ async def search_command(ctx, *, query: str = None):
 
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.images(query, max_results=3))
-            if results:
-                image_url = results[0]['image']
+            results = list(ddgs.images(query, max_results=5))
+            for res in results:
+                image_url = res.get('image') or res.get('thumbnail')
+                if image_url:
+                    break
         
         if image_url:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            img_resp = requests.get(image_url, headers=headers, timeout=10)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            img_resp = requests.get(image_url, headers=headers, timeout=8)
             if img_resp.status_code == 200:
                 search_img_pil = Image.open(io.BytesIO(img_resp.content)).convert("RGBA")
     except Exception as e:
-        print(f"Lỗi tìm kiếm ảnh: {e}")
+        print(f"Lỗi tìm kiếm hoặc tải ảnh: {e}")
 
-    prompt_for_ai = f"Cậu vừa tìm kiếm thông tin và hình ảnh về chủ đề '{query}' trên mạng. Hãy đưa ra nhận xét, chia sẻ hoặc phân tích sâu sắc, dịu dàng về nó cho người dùng."
+    prompt_for_ai = f"Cậu vừa tìm kiếm thông tin và hình ảnh về chủ đề '{query}' trên mạng. Hãy đưa ra nhận xét, chia sẻ hoặc phân tích sâu sắc, dịu dàng, viết đủ dài để chia thành 8 phần cho người dùng."
     
     if search_img_pil:
         reply = await ask_monika([prompt_for_ai, search_img_pil])
     else:
         reply = await ask_monika(prompt_for_ai)
 
-    pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=5)
+    pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=8)
 
     await status_msg.delete()
     
@@ -409,11 +533,8 @@ async def search_command(ctx, *, query: str = None):
         img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=search_img_pil)
         file = discord.File(fp=img_buf, filename="monika_render.png")
         
-        if len(pages) > 1:
-            view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil)
-            await ctx.send(file=file, view=view)
-        else:
-            await ctx.send(file=file)
+        view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil)
+        await ctx.send(file=file, view=view)
     else:
         embed = discord.Embed(title=f"💚 Monika Search: {query}", description=reply, color=discord.Color.from_rgb(120, 198, 122))
         await ctx.send(embed=embed)
@@ -529,7 +650,7 @@ async def on_message(message):
                     img_bytes = await attachment.read()
                     pil_image = Image.open(io.BytesIO(img_bytes))
                     
-                    user_prompt = clean_content if clean_content else "Cậu nhận xét thế nào về bức ảnh này?"
+                    user_prompt = clean_content if clean_content else "Cậu nhận xét thế nào về bức ảnh này? Hãy trả lời chi tiết chia thành đúng 8 phần."
                     reply = await ask_monika([user_prompt, pil_image])
                 else:
                     reply = await ask_monika(clean_content if clean_content else "Cậu xem file này giúp tôi nhé.")
@@ -539,24 +660,21 @@ async def on_message(message):
                     return
                 reply = await ask_monika(clean_content)
 
-            pages = split_text_into_pages(reply, max_chars_per_page=140, max_pages=5)
+            pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=8)
 
             if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(pages[0], chibi_state="happy")
                 file = discord.File(fp=img_buf, filename="monika_render.png")
                 
-                if len(pages) > 1:
-                    view = DialoguePaginationView(pages, author_id=message.author.id)
-                    await message.channel.send(file=file, view=view)
-                else:
-                    await message.channel.send(file=file)
+                view = DialoguePaginationView(pages, author_id=message.author.id)
+                await message.channel.send(file=file, view=view)
                 return
 
             embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
             await message.channel.send(embed=embed)
 
 # ==========================================
-# 9. KHỞI CHẠY BOT
+# 10. KHỞI CHẠY BOT
 # ==========================================
 if __name__ == "__main__":
     t_flask = threading.Thread(target=run_flask)
