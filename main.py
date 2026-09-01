@@ -140,7 +140,7 @@ def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
         else:
             bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
 
-        # Nếu có ảnh search, hiển thị nó lên màn hình máy tính (khu vực góc trên bên trái)
+        # Hiển thị ảnh tìm kiếm lên màn hình máy tính (góc trên bên trái) nếu có
         if search_img_pil:
             search_resized = search_img_pil.resize((420, 240))
             bg.paste(search_resized, (35, 80))
@@ -346,7 +346,7 @@ async def custom_help(ctx):
     )
     embed.add_field(
         name="🔍 Tìm kiếm & Web",
-        value="`!Msearch [từ khóa]`: Monika sẽ tra cứu internet, hiển thị ảnh trên màn hình máy tính và nhận xét.",
+        value="`!Msearch [từ khóa]`: Monika tra cứu internet, hiển thị ảnh trên màn hình máy tính và nhận xét.",
         inline=False
     )
     embed.add_field(
@@ -381,7 +381,6 @@ async def search_command(ctx, *, query: str = None):
     image_url = None
 
     try:
-        # Sử dụng thư viện duckduckgo_search để lấy hình ảnh trực tuyến
         with DDGS() as ddgs:
             results = list(ddgs.images(query, max_results=3))
             if results:
@@ -395,7 +394,6 @@ async def search_command(ctx, *, query: str = None):
     except Exception as e:
         print(f"Lỗi tìm kiếm ảnh: {e}")
 
-    # Đưa ảnh và từ khóa cho Gemini nhận xét
     prompt_for_ai = f"Cậu vừa tìm kiếm thông tin và hình ảnh về chủ đề '{query}' trên mạng. Hãy đưa ra nhận xét, chia sẻ hoặc phân tích sâu sắc, dịu dàng về nó cho người dùng."
     
     if search_img_pil:
