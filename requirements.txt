@@ -1,8 +1,8 @@
 discord.py[voice]
-PyNaCl
 google-genai
-pillow
-opencv-python-headless
-flask
-duckduckgo_search
+Pillow
 requests
+flask
+duckduckgo-search
+gTTS
+Pynacl
