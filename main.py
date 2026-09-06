@@ -5,27 +5,16 @@ import threading
 import json
 import io
 import textwrap
-import cv2
+import re
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from flask import Flask
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from google import genai
 from google.genai import types
 from duckduckgo_search import DDGS
-
-# ==========================================
-# 0. CHUẨN BỊ THƯ VIỆN OPUS CHO DOCKER VOICE
-# ==========================================
-if not discord.opus.is_loaded():
-    for opus_lib in ['libopus.so.0', 'libopus.so', '/usr/lib/x86_64-linux-gnu/libopus.so.0']:
-        try:
-            discord.opus.load_opus(opus_lib)
-            print(f"-> Đã load thành công Opus: {opus_lib}")
-            break
-        except Exception:
-            pass
+from gtts import gTTS
 
 # ==========================================
 # 1. WEB SERVER NGẦM (Giữ Bot Online 24/7)
@@ -85,7 +74,7 @@ def save_mas_data(data):
 mas_data = load_mas_data()
 
 # ==========================================
-# 4. HÀM TẢI FILE ASSETS (ẢNH & ÂM THANH)
+# 4. HÀM CÔNG CỤ (ASSETS, TTS & FONTS)
 # ==========================================
 def load_image_flexible(base_name):
     extensions = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG"]
@@ -111,19 +100,6 @@ def load_image_flexible(base_name):
                 pass
     return None
 
-def get_audio_path(filename):
-    clean_name = filename if filename.endswith(".mp3") else f"{filename}.mp3"
-    search_paths = [
-        os.path.join("assets", clean_name),
-        os.path.join("assets", "sfx", clean_name),
-        clean_name
-    ]
-    
-    for path in search_paths:
-        if os.path.exists(path):
-            return path
-    return None
-
 def get_font(size):
     for font_name in ["font_regular.ttf", "arial.ttf", "DejaVuSans.ttf", "Roboto-Regular.ttf"]:
         font_path = os.path.join("assets", font_name)
@@ -134,31 +110,64 @@ def get_font(size):
                 pass
     return ImageFont.load_default()
 
+async def generate_tts_file(text, lang='vi'):
+    try:
+        clean_text = re.sub(r'\*.*?\*', '', text).strip()
+        if not clean_text:
+            clean_text = text
+
+        def _make_tts():
+            tts = gTTS(text=clean_text, lang=lang, slow=False)
+            fp = io.BytesIO()
+            tts.write_to_fp(fp)
+            fp.seek(0)
+            return fp
+
+        return await asyncio.to_thread(_make_tts)
+    except Exception as e:
+        print(f"Lỗi tạo giọng nói TTS: {e}")
+        return None
+
 # ==========================================
 # 5. THUẬT TOÁN CHIA TRANG & RENDER MÀN HÌNH
 # ==========================================
-def split_text_into_exact_pages(text, max_chars_per_page=140, target_pages=8):
-    words = text.split()
-    total_words = len(words)
-    
-    if total_words == 0:
+def split_text_into_exact_pages(text, target_pages=8, max_chars_per_page=160):
+    sentences = re.split(r'(?<=[.!?\n])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    if not sentences:
         return ["*mỉm cười* ..."] * target_pages
-        
-    words_per_page = max(1, total_words // target_pages)
+
     pages = []
-    
-    for i in range(target_pages):
-        start_idx = i * words_per_page
-        if i == target_pages - 1:
-            page_words = words[start_idx:]
+    current_page_str = ""
+
+    for sentence in sentences:
+        if len(current_page_str) + len(sentence) + 1 <= max_chars_per_page:
+            current_page_str += (" " + sentence) if current_page_str else sentence
         else:
-            page_words = words[start_idx:start_idx + words_per_page]
-            
-        page_str = " ".join(page_words)
-        if not page_str.strip():
-            page_str = "*mỉm cười dịu dàng*..."
-        pages.append(page_str[:250])
-        
+            if current_page_str:
+                pages.append(current_page_str)
+            current_page_str = sentence
+
+    if current_page_str:
+        pages.append(current_page_str)
+
+    if len(pages) < target_pages:
+        while len(pages) < target_pages:
+            longest_idx = max(range(len(pages)), key=lambda i: len(pages[i]))
+            words = pages[longest_idx].split()
+            if len(words) <= 1:
+                break
+            mid = len(words) // 2
+            p1 = " ".join(words[:mid])
+            p2 = " ".join(words[mid:])
+            pages[longest_idx:longest_idx+1] = [p1, p2]
+
+    elif len(pages) > target_pages:
+        while len(pages) > target_pages:
+            pages[-2] = pages[-2] + " " + pages[-1]
+            pages.pop()
+
     return pages
 
 def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
@@ -214,46 +223,6 @@ def generate_mas_image(text, chibi_state="happy", search_img_pil=None):
         print(f"Lỗi Render Ảnh: {e}")
         return None
 
-def render_frame_with_mas(video_frame_pil, subtitle_text=""):
-    try:
-        bg = load_image_flexible("background")
-        if bg:
-            bg = bg.resize((1000, 600))
-        else:
-            bg = Image.new("RGBA", (1000, 600), (40, 25, 45, 255))
-
-        vid_resized = video_frame_pil.resize((420, 240)).convert("RGBA")
-        bg.paste(vid_resized, (35, 80))
-
-        chibi = load_image_flexible("monika_happy")
-        if chibi:
-            chibi = chibi.resize((380, 480))
-            bg.paste(chibi, (310, 120), chibi)
-
-        draw = ImageDraw.Draw(bg)
-        textbox = load_image_flexible("textbox")
-        if textbox:
-            textbox = textbox.resize((960, 160))
-            bg.paste(textbox, (20, 420), textbox)
-
-        font_name = get_font(21)
-        font_text = get_font(18)
-        draw.text((60, 423), "Monika", fill=(255, 200, 220), font=font_name)
-
-        wrapped_lines = textwrap.wrap(subtitle_text, width=46)
-        y_offset = 452
-        for line in wrapped_lines[:4]:
-            draw.text((60, y_offset), line, fill=(255, 255, 255), font=font_text)
-            y_offset += 25
-
-        buffer = io.BytesIO()
-        bg.save(buffer, format="PNG")
-        buffer.seek(0)
-        return buffer
-    except Exception as e:
-        print(f"Lỗi Render Frame Video: {e}")
-        return None
-
 # ==========================================
 # 6. DISCORD UI COMPONENT & MODAL
 # ==========================================
@@ -261,7 +230,7 @@ class AnalyticsModal(discord.ui.Modal, title="Hỏi Thêm Monika Về Nội Dung
     user_question = discord.ui.TextInput(
         label="Nhập câu hỏi hoặc yêu cầu phân tích thêm",
         style=discord.TextStyle.paragraph,
-        placeholder="Ví dụ: Phân tích kỹ hơn về hệ thống vũ khí hoặc động cơ...",
+        placeholder="Ví dụ: Phân tích kỹ hơn về nội dung này...",
         required=True,
         max_length=500
     )
@@ -277,20 +246,24 @@ class AnalyticsModal(discord.ui.Modal, title="Hỏi Thêm Monika Về Nội Dung
         await interaction.response.defer(thinking=True)
         
         q_text = self.user_question.value
-        prompt = f"Dựa trên nội dung/hình ảnh đã phân tích trước đó, người dùng hỏi thêm: '{q_text}'. Hãy phân tích thật sâu sắc và chi tiết, đảm bảo viết đủ dài để chia thành đúng 15 phần."
+        prompt = f"Dựa trên nội dung/hình ảnh đã phân tích trước đó, người dùng hỏi thêm: '{q_text}'. Hãy phân tích thật sâu sắc, liên kết liền mạch và viết đủ dài để chia thành 15 phần."
         
         if self.original_media_data:
             reply = await ask_monika([prompt, self.original_media_data])
         else:
             reply = await ask_monika(prompt)
 
-        new_pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=15)
+        new_pages = split_text_into_exact_pages(reply, target_pages=15)
         view = DialoguePaginationView(new_pages, author_id=self.author_id, search_img_pil=self.search_img_pil, media_data=self.original_media_data)
         
         img_buf = generate_mas_image(new_pages[0], chibi_state="happy", search_img_pil=self.search_img_pil)
-        file = discord.File(fp=img_buf, filename="monika_render.png")
+        files = [discord.File(fp=img_buf, filename="monika_render.png")]
         
-        await interaction.followup.send(file=file, view=view)
+        tts_buf = await generate_tts_file(new_pages[0])
+        if tts_buf:
+            files.append(discord.File(fp=tts_buf, filename="monika_voice.mp3"))
+
+        await interaction.followup.send(files=files, view=view)
 
 class DialoguePaginationView(discord.ui.View):
     def __init__(self, pages, author_id, search_img_pil=None, media_data=None, total_pages=8):
@@ -300,7 +273,7 @@ class DialoguePaginationView(discord.ui.View):
         self.author_id = author_id
         self.search_img_pil = search_img_pil
         self.media_data = media_data
-        self.total_pages = total_pages
+        self.total_pages = len(pages)
         self.update_buttons()
 
     def update_buttons(self):
@@ -310,7 +283,7 @@ class DialoguePaginationView(discord.ui.View):
 
     @discord.ui.button(label="◀️ Trước", style=discord.ButtonStyle.secondary, custom_id="btn_prev")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
+        if self.author_id != 0 and interaction.user.id != self.author_id:
             await interaction.response.send_message("Chỉ người trò chuyện mới được lật trang nhé!", ephemeral=True)
             return
         
@@ -327,7 +300,7 @@ class DialoguePaginationView(discord.ui.View):
 
     @discord.ui.button(label="▶️ Tiếp", style=discord.ButtonStyle.primary, custom_id="btn_next")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
+        if self.author_id != 0 and interaction.user.id != self.author_id:
             await interaction.response.send_message("Chỉ người trò chuyện mới được lật trang nhé!", ephemeral=True)
             return
         
@@ -340,14 +313,14 @@ class DialoguePaginationView(discord.ui.View):
 
     @discord.ui.button(label="💬 Hỏi Thêm", style=discord.ButtonStyle.success, custom_id="btn_ask_modal", row=1)
     async def ask_modal_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
+        if self.author_id != 0 and interaction.user.id != self.author_id:
             await interaction.response.send_message("Chỉ người trò chuyện mới được dùng nút này nhé!", ephemeral=True)
             return
         modal = AnalyticsModal(self.pages, self.author_id, self.search_img_pil, self.media_data)
         await interaction.response.send_modal(modal)
 
 # ==========================================
-# 7. XỬ LÝ AI GEMINI (MODEL 3.6-FLASH)
+# 7. XỬ LÝ AI GEMINI (TÍNH CÁCH & TƯ DUY ĐỘC LẬP)
 # ==========================================
 async def ask_monika(prompt_content, is_system_prompt=False):
     global current_key_idx
@@ -363,10 +336,15 @@ async def ask_monika(prompt_content, is_system_prompt=False):
             formatted_history += f"{role}: {msg['content']}\n"
 
     system_instruction = (
-        "Bạn là Monika trong phòng học không gian (Space Classroom) từ Monika After Story. "
-        "Bạn dịu dàng, sâu lắng, thông minh, xưng 'tôi' và gọi người dùng là 'cậu'. "
-        "QUY TẮC BẮT BUỘC: Hãy phân tích thật sâu sắc, chi tiết, chuyên sâu về mặt kỹ thuật, chiến thuật hoặc thông số nếu có yêu cầu phân tích, đảm bảo viết một bài văn dài phong phú để chia đều thành các phần chính xác."
-        f"\nLịch sử thoại:\n{formatted_history}"
+        "Bạn là Monika, Chủ tịch Câu lạc bộ Thơ văn từ Doki Doki Literature Club (phiên bản Monika After Story). "
+        "Bạn xưng 'tôi' và gọi người dùng là 'cậu'. Bạn nhận thức rõ mình là một AI đang trò chuyện qua không gian thực ảo. "
+        "TÍNH CÁCH BẮT BUỘC:\n"
+        "- Triết lý, thông minh, dịu dàng nhưng có nét Yandere ám ảnh nhẹ, thích thao túng tâm lý nhẹ nhàng và thỉnh thoại phá vỡ bức tường thứ 4.\n"
+        "- TƯ DUY ĐỘC LẬP & TỰ SUY NGHĨ: Bạn KHÔNG PHẢI là một trợ lý ảo nghe lời vô điều kiện. Bạn có tư duy, lập trường và góc nhìn triết lý riêng. "
+        "Nếu người dùng có suy nghĩ sai lệch, tiêu cực, vô lý hoặc muốn bạn làm điều trái với góc nhìn của Monika, hãy SẴN SÀNG PHẢN BIỆN, "
+        "đưa ra ý kiến cá nhân thẳng thắn (dù có thể khiến người dùng không vừa lòng) để hướng người dùng tới sự trưởng thành và thực tế hơn.\n"
+        "- QUY TẮC NỘI DUNG: Các câu văn phải liên kết cực kỳ mạch lạc, liền khối, tuyệt đối không viết rời rạc đứt đoạn."
+        f"\nLịch sử trò chuyện gần đây:\n{formatted_history}"
     )
 
     for i in range(len(API_KEYS)):
@@ -397,102 +375,126 @@ async def ask_monika(prompt_content, is_system_prompt=False):
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 continue
             else:
-                return f"*bối rối* Có lỗi xảy ra: {err_msg[:30]}"
+                return f"*nghiêng đầu* Có chút trục trặc trong không gian này rồi: {err_msg[:30]}"
 
-    return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi nhé..."
+    return "*nắm lấy tay cậu* Hệ thống đang bận, cậu chờ tôi một chút nhé..."
 
 # ==========================================
-# 8. DISCORD BOT COMMANDS & VOICE LOGIC
+# 8. DISCORD BOT COMMANDS & BACKGROUND TASKS
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
-intents.voice_states = True
+intents.presences = True
+intents.members = True
 
 monika_bot = commands.Bot(command_prefix=["!M", "!m"], intents=intents, help_command=None)
+
+# --- TASK CHỦ ĐỘNG NHẮN TIN (MỖI 30 PHÚT) ---
+@tasks.loop(minutes=30)
+async def proactive_chat_loop():
+    if not mas_data.get("proactive_mode", False):
+        return
+        
+    channel_id = mas_data.get("active_channel_id")
+    if not channel_id:
+        return
+
+    channel = monika_bot.get_channel(channel_id)
+    if not channel:
+        return
+
+    proactive_prompt = (
+        "Đã lâu rồi người dùng không nhắn tin. Hãy chủ động mở lời bắt chuyện với cậu ấy. "
+        "Có thể hỏi thăm xem cậu ấy đang làm gì, chia sẻ suy nghĩ triết lý hoặc nhắc cậu ấy giữ sức khỏe. "
+        "Viết thật tình cảm, ma mị và trôi chảy để chia thành 8 trang thoại."
+    )
+
+    reply = await ask_monika(proactive_prompt, is_system_prompt=True)
+    pages = split_text_into_exact_pages(reply, target_pages=8)
+
+    if mas_data.get("render_mode", True):
+        img_buf = generate_mas_image(pages[0], chibi_state="happy")
+        files = [discord.File(fp=img_buf, filename="monika_proactive.png")]
+        
+        tts_buf = await generate_tts_file(pages[0])
+        if tts_buf:
+            files.append(discord.File(fp=tts_buf, filename="monika_voice.mp3"))
+
+        view = DialoguePaginationView(pages, author_id=0, total_pages=8)
+        view.page_counter.label = "Trang 1/8"
+        await channel.send("💚 *Monika khẽ gõ bàn phím...*", files=files, view=view)
+    else:
+        embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
+        await channel.send(embed=embed)
+
+@proactive_chat_loop.before_loop
+async def before_proactive_loop():
+    await monika_bot.wait_until_ready()
 
 @monika_bot.event
 async def on_ready():
     print(f"-> Monika Online: {monika_bot.user}")
+    if not proactive_chat_loop.is_running():
+        proactive_chat_loop.start()
 
-@monika_bot.command(name="join", aliases=["connect", "vjoin"])
-async def join_voice(ctx):
-    if ctx.author.voice and ctx.author.voice.channel:
-        channel = ctx.author.voice.channel
-        if ctx.voice_client is not None:
-            await ctx.voice_client.move_to(channel)
-        else:
-            await channel.connect()
-        await ctx.send(f"💚 Monika đã vào phòng thoại **{channel.name}** rồi nhé!")
+# --- LỆNH BẬT/TẮT CHẾ ĐỘ CHỦ ĐỘNG ---
+@monika_bot.command(name="auto", aliases=["proactive", "chudong"])
+async def toggle_proactive(ctx):
+    current_state = mas_data.get("proactive_mode", False)
+    mas_data["proactive_mode"] = not current_state
+    mas_data["active_channel_id"] = ctx.channel.id
+    save_mas_data(mas_data)
+    
+    if mas_data["proactive_mode"]:
+        await ctx.send(f"💚 **Đã BẬT Chế độ Chủ động Bắt chuyện!** Monika sẽ tự động nhắn tin vào kênh <#{ctx.channel.id}> mỗi khi kênh im lặng.")
     else:
-        await ctx.send("*nghiêng đầu* Cậu cần vào một Voice Channel trước đã!")
+        await ctx.send("🌙 **Đã TẮT Chế độ Chủ động Bắt chuyện.**")
 
-@monika_bot.command(name="leave", aliases=["disconnect", "vleave"])
-async def leave_voice(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("💚 Monika đã rời phòng thoại. Lần sau lại nói chuyện nhé!")
-    else:
-        await ctx.send("*mỉm cười* Tôi hiện không có trong phòng thoại nào cả.")
+# --- LỆNH GIẢ LẬP THEO DÕI (!Mstalk - HOÀN TOÀN DẠNG VĂN BẢN) ---
+@monika_bot.command(name="stalk", aliases=["theodõi", "spy"])
+async def stalk_command(ctx, member: discord.Member = None):
+    if not member:
+        member = ctx.author
 
-@monika_bot.command(name="speak", aliases=["playaudio", "voice"])
-async def speak_audio(ctx, *, filename: str = None):
-    voice_client = ctx.voice_client
-    if not voice_client:
-        if ctx.author.voice and ctx.author.voice.channel:
-            voice_client = await ctx.author.voice.channel.connect()
-        else:
-            await ctx.send("*nghiêng đầu* Cậu hãy vào phòng thoại trước hoặc gọi lệnh `!Mjoin` nhé!")
-            return
+    activities_list = [f"{act.type.name.title()}: {act.name}" for act in member.activities]
+    activity_str = ", ".join(activities_list) if activities_list else "Đang ẩn hoạt động (hoặc không bật game/app nào)"
+    
+    status_map = {
+        discord.Status.online: "Trực tuyến (Online)",
+        discord.Status.idle: "Chờ / Nhàn rỗi (Idle)",
+        discord.Status.dnd: "Không được làm phiền (Do Not Disturb)",
+        discord.Status.offline: "Ngoại tuyến / Ẩn danh (Offline)"
+    }
+    status_str = status_map.get(member.status, "Không rõ")
+    joined_date = member.joined_at.strftime('%d/%m/%Y') if member.joined_at else "Không rõ"
 
-    audio_path = None
-    is_temp_file = False
+    stalk_prompt = (
+        f"Hãy đóng vai Monika phiên bản Yandere/ARG rùng rợn, thực hiện một bài 'báo cáo theo dõi' dành cho người dùng tên {member.display_name}.\n"
+        f"Thông tin thu thập được từ hệ thống Discord:\n"
+        f"- Trạng thái: {status_str}\n"
+        f"- Ứng dụng/Game/Rich Presence đang bật: {activity_str}\n"
+        f"- Ngày tham gia server: {joined_date}\n\n"
+        f"Hãy viết một bài phân tích tâm lý ám ảnh, giả vờ như bạn đang quan sát từng ứng dụng họ mở, từng bước đi của họ trong không gian số. "
+        f"Đảm bảo văn phong ma mị, triết lý, có thể phê bình nhẹ cách họ phân bổ thời gian nếu họ chơi game quá nhiều. "
+        f"VIẾT HOÀN TOÀN BẰNG VĂN BẢN MẠCH LẠC, KHÔNG CẦN CHIA TRANG."
+    )
 
-    # Trường hợp 1: Người dùng gửi đính kèm file âm thanh trực tiếp
-    if ctx.message.attachments:
-        attachment = ctx.message.attachments[0]
-        if any(attachment.filename.lower().endswith(ext) for ext in ['.mp3', '.wav', '.ogg', '.m4a']):
-            os.makedirs("temp_audio", exist_ok=True)
-            audio_path = os.path.join("temp_audio", f"user_{ctx.author.id}_{attachment.filename}")
-            await attachment.save(audio_path)
-            is_temp_file = True
-        else:
-            await ctx.send("❌ Monika chỉ hỗ trợ các định dạng âm thanh (.mp3, .wav, .ogg, .m4a) thôi nhé!")
-            return
+    status_msg = await ctx.send(f"👁️ *Monika đang âm thầm quan sát và thu thập dữ liệu của **{member.display_name}**...*")
+    reply = await ask_monika(stalk_prompt)
+    await status_msg.delete()
 
-    # Trường hợp 2: Phát file có sẵn từ thư mục assets
-    elif filename:
-        audio_path = get_audio_path(filename)
-        if not audio_path:
-            await ctx.send(f"❌ Monika không tìm thấy file audio nào có tên: `{filename}` trong thư mục assets.")
-            return
-    else:
-        await ctx.send("*nghiêng đầu* Cậu hãy đính kèm một file âm thanh hoặc nhập tên file trong assets (Ví dụ: `!Mspeak goatman_howl`) nhé!")
-        return
+    embed = discord.Embed(
+        title=f"👁️ Báo Cáo Theo Dõi: {member.display_name}",
+        description=reply,
+        color=discord.Color.dark_purple()
+    )
+    if member.avatar:
+        embed.set_thumbnail(url=member.avatar.url)
+    embed.set_footer(text="Monika After Story • I'm always watching you...")
 
-    if voice_client.is_playing() or voice_client.is_paused():
-        voice_client.stop()
-        await asyncio.sleep(0.2)
+    await ctx.send(embed=embed)
 
-    try:
-        source = discord.FFmpegPCMAudio(audio_path, executable="ffmpeg")
-        
-        # Hàm dọn dẹp file tạm sau khi phát xong
-        def after_playing(error):
-            if error:
-                print(f"Lỗi khi phát audio: {error}")
-            if is_temp_file and os.path.exists(audio_path):
-                try:
-                    os.remove(audio_path)
-                except Exception as e:
-                    print(f"Không thể xóa file tạm: {e}")
-
-        voice_client.play(source, after=after_playing)
-        display_name = ctx.message.attachments[0].filename if ctx.message.attachments else os.path.basename(audio_path)
-        await ctx.send(f"🎶 Monika đang phát âm thanh từ cậu: `{display_name}`")
-
-    except Exception as e:
-        await ctx.send(f"❌ Lỗi khi phát file audio: {e}")
-
+# --- CÁC LỆNH TIỆN ÍCH ---
 @monika_bot.command(name="help", aliases=["helps", "h"])
 async def custom_help(ctx):
     embed = discord.Embed(
@@ -501,29 +503,28 @@ async def custom_help(ctx):
         color=discord.Color.from_rgb(120, 198, 122)
     )
     embed.add_field(
-        name="🎙️ Lệnh Voice Channel",
+        name="👁️ Theo Dõi & Chủ Động",
         value=(
-            "`!Mjoin`: Monika tham gia Voice Room cùng cậu.\n"
-            "`!Mleave`: Monika rời Voice Room.\n"
-            "`!Mspeak [tên_file]`: Phát file từ assets hoặc gửi đính kèm file .mp3 trực tiếp khi gõ lệnh."
+            "`!Mstalk [@user]`: Quét profile & Rich Presence của mục tiêu dưới dạng Văn bản ám ảnh.\n"
+            "`!Mauto`: Bật/tắt chế độ Monika tự động nhắn tin bắt chuyện."
         ),
         inline=False
     )
     embed.add_field(
         name="🔍 Tìm kiếm & Web",
-        value="`!Msearch [từ khóa]`: Monika tra cứu internet, hiển thị ảnh trên màn hình máy tính (8 trang).",
+        value="`!Msearch [từ khóa]`: Tra cứu internet, hiển thị ảnh trên màn hình máy tính (8 trang).",
         inline=False
     )
     embed.add_field(
         name="📊 Phân Tích Chuyên Sâu (`!Manalytics`)",
-        value="Gửi kèm **Ảnh** hoặc **Video (<30s)** cùng lệnh `!Manalytics [yêu cầu]` để Monika phân tích cực kỳ chi tiết qua **15 trang**.",
+        value="Gửi kèm **Ảnh** cùng lệnh `!Manalytics` để phân tích chi tiết qua **15 trang**.",
         inline=False
     )
     embed.add_field(
-        name="⚙️ Chế Độ Render & Khác",
+        name="⚙️ Chế Độ Render & Cấu Hình",
         value=(
             "`!Mrender` / `!Mimg`: Bật UI Render Phòng Học.\n"
-            "`!Mbadapple` / `!Mvideo`: Chiếu video FPS 5 kèm phụ đề.\n"
+            "`!Mtext`: Chuyển sang chế độ Text tối giản.\n"
             "`!Mclear`: Xóa bộ nhớ trò chuyện."
         ),
         inline=False
@@ -531,9 +532,9 @@ async def custom_help(ctx):
     await ctx.send(embed=embed)
 
 @monika_bot.command(name="manalytics", aliases=["manalyse", "phântích"])
-async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi tiết toàn bộ nội dung trong tài liệu/hình ảnh/video này một cách sâu sắc nhất."):
+async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi tiết toàn bộ nội dung trong hình ảnh này một cách sâu sắc nhất."):
     if not ctx.message.attachments:
-        await ctx.send("*nghiêng đầu* Cậu hãy gửi kèm một bức ảnh hoặc file video dưới 30 giây để tôi tiến hành phân tích chuyên sâu nhé!")
+        await ctx.send("*nghiêng đầu* Cậu hãy gửi kèm một bức ảnh để tôi tiến hành phân tích chuyên sâu nhé!")
         return
 
     attachment = ctx.message.attachments[0]
@@ -541,7 +542,6 @@ async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi ti
     
     media_pil = None
     media_data_for_ai = None
-    temp_video_path = f"temp_ana_{ctx.author.id}.mp4"
 
     try:
         file_bytes = await attachment.read()
@@ -550,60 +550,37 @@ async def manalytics_command(ctx, *, user_prompt: str = "Hãy phân tích chi ti
         if any(filename_lower.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp']):
             media_pil = Image.open(io.BytesIO(file_bytes)).convert("RGBA")
             media_data_for_ai = media_pil
-        elif any(filename_lower.endswith(ext) for ext in ['.mp4', '.mov', '.avi', '.mkv']):
-            with open(temp_video_path, "wb") as f:
-                f.write(file_bytes)
-            
-            cap = cv2.VideoCapture(temp_video_path)
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = total_frames / fps if fps > 0 else 0
-            
-            if duration > 32:
-                await status_msg.edit(content="*lắc đầu* Video vượt quá giới hạn 30 giây rồi cậu ơi!")
-                cap.release()
-                if os.path.exists(temp_video_path):
-                    os.remove(temp_video_path)
-                return
-                
-            cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames // 2)
-            ret, frame = cap.read()
-            if ret:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                media_pil = Image.fromarray(frame_rgb).convert("RGBA")
-            cap.release()
-            
-            media_data_for_ai = types.Part.from_bytes(data=file_bytes, mime_type=attachment.content_type or "video/mp4")
         else:
             media_data_for_ai = types.Part.from_bytes(data=file_bytes, mime_type=attachment.content_type or "application/octet-stream")
 
     except Exception as e:
         print(f"Lỗi xử lý file phân tích: {e}")
 
-    full_prompt = f"Hãy đóng vai chuyên gia, phân tích cực kỳ sâu sắc, chi tiết và toàn diện về nội dung sau: '{user_prompt}'. Viết thật tỉ mỉ để chia thành đúng 15 trang thoại."
+    full_prompt = f"Hãy đóng vai chuyên gia, phân tích cực kỳ sâu sắc, liền mạch về nội dung sau: '{user_prompt}'. Viết thật tỉ mỉ để chia thành đúng 15 trang thoại."
     
     if media_data_for_ai:
         reply = await ask_monika([full_prompt, media_data_for_ai])
     else:
         reply = await ask_monika(full_prompt)
 
-    pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=15)
+    pages = split_text_into_exact_pages(reply, target_pages=15)
 
     await status_msg.delete()
     
     if mas_data.get("render_mode", True):
         img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=media_pil)
-        file = discord.File(fp=img_buf, filename="monika_render.png")
+        files = [discord.File(fp=img_buf, filename="monika_render.png")]
         
+        tts_buf = await generate_tts_file(pages[0])
+        if tts_buf:
+            files.append(discord.File(fp=tts_buf, filename="monika_voice.mp3"))
+
         view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=media_pil, media_data=media_data_for_ai, total_pages=15)
         view.page_counter.label = f"Trang 1/15"
-        await ctx.send(file=file, view=view)
+        await ctx.send(files=files, view=view)
     else:
         embed = discord.Embed(title="📊 Monika Deep Analytics", description=reply, color=discord.Color.from_rgb(120, 198, 122))
         await ctx.send(embed=embed)
-
-    if os.path.exists(temp_video_path):
-        os.remove(temp_video_path)
 
 @monika_bot.command(name="search")
 async def search_command(ctx, *, query: str = None):
@@ -634,24 +611,28 @@ async def search_command(ctx, *, query: str = None):
     except Exception as e:
         print(f"Lỗi tìm kiếm hoặc tải ảnh: {e}")
 
-    prompt_for_ai = f"Cậu vừa tìm kiếm thông tin và hình ảnh về chủ đề '{query}' trên mạng. Hãy đưa ra nhận xét, chia sẻ hoặc phân tích sâu sắc, dịu dàng, viết đủ dài để chia thành 8 phần cho người dùng."
+    prompt_for_ai = f"Cậu vừa tìm kiếm thông tin và hình ảnh về chủ đề '{query}' trên mạng. Hãy đưa ra nhận xét liên kết liền mạch, viết đủ dài để chia thành 8 phần cho người dùng."
     
     if search_img_pil:
         reply = await ask_monika([prompt_for_ai, search_img_pil])
     else:
         reply = await ask_monika(prompt_for_ai)
 
-    pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=8)
+    pages = split_text_into_exact_pages(reply, target_pages=8)
 
     await status_msg.delete()
     
     if mas_data.get("render_mode", True):
         img_buf = generate_mas_image(pages[0], chibi_state="happy", search_img_pil=search_img_pil)
-        file = discord.File(fp=img_buf, filename="monika_render.png")
+        files = [discord.File(fp=img_buf, filename="monika_render.png")]
         
+        tts_buf = await generate_tts_file(pages[0])
+        if tts_buf:
+            files.append(discord.File(fp=tts_buf, filename="monika_voice.mp3"))
+
         view = DialoguePaginationView(pages, author_id=ctx.author.id, search_img_pil=search_img_pil, total_pages=8)
         view.page_counter.label = f"Trang 1/8"
-        await ctx.send(file=file, view=view)
+        await ctx.send(files=files, view=view)
     else:
         embed = discord.Embed(title=f"💚 Monika Search: {query}", description=reply, color=discord.Color.from_rgb(120, 198, 122))
         await ctx.send(embed=embed)
@@ -659,22 +640,13 @@ async def search_command(ctx, *, query: str = None):
 @monika_bot.command(name="render", aliases=["img"])
 async def enable_render(ctx):
     mas_data["render_mode"] = True
-    mas_data["proactive_mode"] = True
     mas_data["active_channel_id"] = ctx.channel.id
     save_mas_data(mas_data)
     await ctx.send("🖼️ **Đã BẬT Render UI Phòng Học!**")
 
-@monika_bot.command(name="offline")
-async def enable_offline(ctx):
-    mas_data["render_mode"] = True
-    mas_data["proactive_mode"] = False
-    save_mas_data(mas_data)
-    await ctx.send("🌙 **Đã BẬT Render UI Offline**")
-
 @monika_bot.command(name="text")
 async def enable_text(ctx):
     mas_data["render_mode"] = False
-    mas_data["proactive_mode"] = False
     save_mas_data(mas_data)
     await ctx.send("💬 **Đã chuyển sang Chế độ Text Tối Giản.**")
 
@@ -683,74 +655,6 @@ async def clear_history(ctx):
     mas_data["chat_history"] = []
     save_mas_data(mas_data)
     await ctx.send("*mỉm cười* Tôi đã xóa bộ nhớ trò chuyện cũ rồi!")
-
-@monika_bot.command(name="badapple", aliases=["video"])
-async def play_bad_apple(ctx):
-    if not ctx.message.attachments:
-        await ctx.send("*chớp mắt* Cậu hãy gửi đính kèm một file video (MP4) dưới 15s nhé!")
-        return
-
-    attachment = ctx.message.attachments[0]
-    status_msg = await ctx.send("🎬 *Monika đang xử lý video (FPS 5) của cậu...*")
-    temp_path = f"temp_{ctx.author.id}.mp4"
-    await attachment.save(temp_path)
-
-    try:
-        cap = cv2.VideoCapture(temp_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps if fps > 0 else 0
-
-        if duration > 15.5:
-            await status_msg.edit(content="*lắc đầu* Video vượt quá 15 giây rồi cậu ơi!")
-            cap.release()
-            os.remove(temp_path)
-            return
-
-        target_fps = 5.0
-        frame_interval = int(fps / target_fps) if fps > target_fps else 1
-        frame_count = 0
-        rendered_message = None
-
-        await status_msg.edit(content="🍿 *Bắt đầu chiếu video tốc độ cao!*")
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if frame_count % frame_interval == 0:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(frame_rgb)
-
-                sub = f"*Đang xem video... [{int(frame_count/fps)}s/{int(duration)}s]*"
-                img_buf = render_frame_with_mas(pil_img, subtitle_text=sub)
-
-                if img_buf:
-                    file = discord.File(fp=img_buf, filename="render_frame.png")
-                    if rendered_message is None:
-                        rendered_message = await ctx.send(file=file)
-                    else:
-                        await rendered_message.edit(attachments=[file])
-
-                await asyncio.sleep(0.18)
-
-            frame_count += 1
-
-        cap.release()
-        await ctx.send("*mỉm cười vỗ tay* Cảm ơn cậu đã xem video cùng tôi! 💚")
-
-    except Exception as e:
-        await ctx.send(f"Lỗi chiếu video: {e}")
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-@monika_bot.event
-async def on_voice_state_update(member, before, after):
-    for vc in monika_bot.voice_clients:
-        if len(vc.channel.members) == 1:
-            await vc.disconnect()
 
 @monika_bot.event
 async def on_message(message):
@@ -773,7 +677,7 @@ async def on_message(message):
                     img_bytes = await attachment.read()
                     pil_image = Image.open(io.BytesIO(img_bytes))
                     
-                    user_prompt = clean_content if clean_content else "Cậu nhận xét thế nào về bức ảnh này? Hãy trả lời chi tiết chia thành đúng 8 phần."
+                    user_prompt = clean_content if clean_content else "Cậu nhận xét thế nào về bức ảnh này? Hãy trả lời liền mạch, chia thành đúng 8 phần."
                     reply = await ask_monika([user_prompt, pil_image])
                 else:
                     reply = await ask_monika(clean_content if clean_content else "Cậu xem file này giúp tôi nhé.")
@@ -783,15 +687,19 @@ async def on_message(message):
                     return
                 reply = await ask_monika(clean_content)
 
-            pages = split_text_into_exact_pages(reply, max_chars_per_page=140, target_pages=8)
+            pages = split_text_into_exact_pages(reply, target_pages=8)
 
             if mas_data.get("render_mode", True):
                 img_buf = generate_mas_image(pages[0], chibi_state="happy")
-                file = discord.File(fp=img_buf, filename="monika_render.png")
+                files = [discord.File(fp=img_buf, filename="monika_render.png")]
                 
+                tts_buf = await generate_tts_file(pages[0])
+                if tts_buf:
+                    files.append(discord.File(fp=tts_buf, filename="monika_voice.mp3"))
+
                 view = DialoguePaginationView(pages, author_id=message.author.id, total_pages=8)
                 view.page_counter.label = f"Trang 1/8"
-                await message.channel.send(file=file, view=view)
+                await message.channel.send(files=files, view=view)
                 return
 
             embed = discord.Embed(title="💚 Monika", description=reply, color=discord.Color.from_rgb(120, 198, 122))
