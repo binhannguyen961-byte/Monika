@@ -365,12 +365,9 @@ async def ask_monika(prompt_content, is_system_prompt=False):
         active_key = API_KEYS[idx]
 
         try:
-            client = genai.Client(api_key=active_key)
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model='gemini-3.6-flash',
-                contents=prompt_content,
-                config=types.GenerateContentConfig(
+            response = client.models.generate_content(
+    model='gemini-3.6"-flash',
+    contents=prompt_content,
                     system_instruction=system_instruction
                 )
             )
