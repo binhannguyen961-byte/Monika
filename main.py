@@ -368,7 +368,7 @@ async def ask_monika(prompt_content, is_system_prompt=False):
             client = genai.Client(api_key=active_key)
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model='gemini-2.0-flash',
+                model='gemini-3.6-flash',
                 contents=prompt_content,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction
